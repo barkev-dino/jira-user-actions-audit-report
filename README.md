@@ -4,6 +4,70 @@ A local web app that produces a complete, field-level audit of Jira user activit
 
 ---
 
+## Download and Run (no git required)
+
+### Step 1 — Download the files
+
+1. Go to **[https://github.com/barkev-dino/jira-user-actions-audit-report](https://github.com/barkev-dino/jira-user-actions-audit-report)**
+2. Click the green **Code** button
+3. Click **Download ZIP**
+4. Unzip the downloaded file — you'll get a folder called `jira-user-actions-audit-report-main`
+
+### Step 2 — Install Python (if you don't have it)
+
+Check if Python is already installed by opening a terminal (Mac: `Terminal`; Windows: `Command Prompt` or `PowerShell`) and running:
+
+```
+python3 --version
+```
+
+If you see a version number (3.9 or higher), skip to Step 3.
+
+If not, download and install Python from **[https://www.python.org/downloads](https://www.python.org/downloads)** — check **"Add Python to PATH"** during installation on Windows.
+
+### Step 3 — Install dependencies
+
+In your terminal, navigate into the unzipped folder and install the required packages:
+
+**Mac / Linux:**
+```bash
+cd jira-user-actions-audit-report-main
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+**Windows:**
+```cmd
+cd jira-user-actions-audit-report-main
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+### Step 4 — Start the app
+
+**Mac / Linux:**
+```bash
+uvicorn app:app --port 8000
+```
+
+**Windows:**
+```cmd
+uvicorn app:app --port 8000
+```
+
+### Step 5 — Open in your browser
+
+Go to: **[http://localhost:8000](http://localhost:8000)**
+
+You'll see the setup screen. Enter your Jira site URL, email, and API token to get started (see [First Use — Auth Setup](#first-use--auth-setup) below).
+
+> **To stop the app**, go back to the terminal and press `Ctrl+C`.
+> **Next time**, just repeat Steps 3–5 (skip `pip install` after the first time — just activate the venv and run `uvicorn`).
+
+---
+
 ## Why REST, not the Activity Stream
 
 The Jira Activity Stream was evaluated and rejected as the report source:
