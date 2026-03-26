@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Jira Audit</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+  <link rel="stylesheet" href="/static/spinner.css" />
+</head>
+<body>
+
+  <!-- ═══════════════════════════════════════════════════════ SETUP SCREEN -->
+  <div id="screen-setup" class="screen hidden">
+    <div class="card setup-card">
+      <h1 class="app-title">Jira Audit</h1>
+      <p class="subtitle">Connect to your Jira Cloud instance to get started.</p>
+
+      <div class="setup-tip">
+        Need an API token?
+        <a href="https://id.atlassian.com/manage-profile/security/api-tokens" target="_blank" rel="noopener">
+          Generate one at id.atlassian.com →
+        </a>
+      </div>
+
+      <div class="form-group">
+        <label for="site-url">Jira Site URL</label>
+        <input id="site-url" type="url" placeholder="https://yoursite.atlassian.net"
+               autocomplete="off" />
+      </div>
+
+      <div class="form-group">
+        <label for="email">Atlassian Email</label>
+        <input id="email" type="email" placeholder="you@example.com" autocomplete="off" />
+      </div>
+
+      <div class="form-group">
+        <label for="api-token">API Token</label>
+        <input id="api-token" type="password" placeholder="Paste your API token here" autocomplete="off" />
+        <span class="hint">
+          Generate one at
+          <a href="https://id.atlassian.com/manage-profile/security/api-tokens" target="_blank" rel="noopener">
+            id.atlassian.com
+          </a>
+        </span>
+      </div>
+
+      <div id="auth-error" class="error-msg hidden"></div>
+
+      <button id="btn-verify" class="btn btn-primary" onclick="handleVerify()">
+        Save and Verify
+      </button>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════ REPORT SCREEN -->
+  <div id="screen-report" class="screen hidden">
+
+    <!-- Top bar -->
+    <header class="topbar">
+      <span class="app-title-small">Jira Audit</span>
+      <span id="connection-badge" class="badge badge-green"></span>
+      <button class="btn btn-ghost btn-sm" onclick="handleDisconnect()">Disconnect</button>
+    </header>
+
+    <!-- Auth error banner — shown when Jira credentials are rejected -->
+    <div id="auth-error-banner" class="auth-error-banner hidden">
+      <div class="auth-error-inner">
+        <div class="auth-error-text">
+          <strong>Jira authentication required</strong>
+          <p id="auth-error-msg">Your saved Jira credentials are no longer valid or no longer have access. Please reauthenticate to continue.</p>
+        </div>
+        <button class="btn auth-error-btn" onclick="handleReauth()">Go to Setup</button>
+      </div>
+    </div>
+
+    <!-- Compact form card -->
+    <div class="card report-card">
+      <div class="report-form-inline">
+
+        <!-- User search -->
+        <div class="rfi-field rfi-users">
+          <label>Users</label>
+          <div class="user-search-wrapper">
+            <input
+              id="user-search-input"
+              type="text"
+              placeholder="Search for a user…"
+              autocomplete="off"
+              oninput="handleUserSearch(this.value)"
+              onfocus="showDropdown()"
+            />
+            <ul id="user-dropdown" class="dropdown hidden"></ul>
+          </div>
+          <div id="selected-users" class="chips-row"></div>
+        </div>
+
+        <!-- Time range -->
+        <div class="rfi-field rfi-range">
+          <label>Time Range</label>
+          <div class="range-row">
+            <select id="range-select" onchange="handleRangeChange(this.value)">
+              <option value="1d">1 day</option>
+              <option value="2d">2 days</option>
+              <option value="3d">3 days</option>
+              <option value="7d" selected>1 week</option>
+              <option value="30d">30 days</option>
+              <option value="custom">Custom…</option>
+            </select>
+            <div id="date-inputs" class="date-inputs hidden">
+              <input id="date-start" type="date" />
+              <span class="date-sep">→</span>
+              <input id="date-end" type="date" />
+            </div>
+          </div>
+          <div id="date-error" class="error-msg hidden" style="margin-top:4px"></div>
+        </div>
+
+        <!-- Generate button -->
+        <div class="rfi-field rfi-btn-wrap">
+          <label>&nbsp;</label>
+          <button id="btn-generate" class="btn btn-primary rfi-btn" onclick="handleGenerate()">
+            Generate
+          </button>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- Inline report error — replaces alert() for generation failures -->
+    <div id="report-error" class="report-error-msg hidden"></div>
+
+    <!-- Loading area -->
+    <div id="loading-area" class="loading-area hidden">
+      <div class="spinner"></div>
+      <p id="loading-counter" class="loading-counter">Starting…</p>
+      <p id="loading-step" class="loading-step">&nbsp;</p>
+      <div class="progress-bar-track">
+        <div id="progress-bar" class="progress-bar-fill" style="width:0%"></div>
+      </div>
+    </div>
+
+    <!-- Results area: summary on top, table below -->
+    <div id="results-area" class="results-area hidden">
+
+      <!-- ── Summary + toolbar row ── -->
+      <div class="summary-section">
+        <div class="summary-header">
+          <div class="summary-header-left">
+            <span class="summary-title">Summary</span>
+            <span id="summary-timespan" class="summary-timespan"></span>
+            <span id="window-display" class="window-display"></span>
+          </div>
+          <div class="summary-header-right">
+            <span id="results-count" class="results-count"></span>
+            <input id="table-filter" type="text" placeholder="Filter rows…"
+                   oninput="filterTable(this.value)" class="filter-input" />
+            <button class="btn btn-ghost btn-sm" onclick="exportCSV()">Export CSV</button>
+          </div>
+        </div>
+        <div id="summary-table-wrap" class="summary-table-wrap"></div>
+      </div>
+
+      <!-- ── Main table ── -->
+      <div class="main-table-col">
+        <div class="table-wrapper">
+          <table id="results-table">
+            <thead>
+              <tr>
+                <th onclick="sortBy('timestamp')" class="sortable">Timestamp <span class="sort-icon">↕</span></th>
+                <th onclick="sortBy('user')" class="sortable">User <span class="sort-icon">↕</span></th>
+                <th onclick="sortBy('issue_key')" class="sortable">Issue <span class="sort-icon">↕</span></th>
+                <th onclick="sortBy('action_type')" class="sortable">Action <span class="sort-icon">↕</span></th>
+                <th>Details</th>
+                <th onclick="sortBy('project')" class="sortable">Project <span class="sort-icon">↕</span></th>
+                <th>Link</th>
+              </tr>
+            </thead>
+            <tbody id="results-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+
+    </div><!-- /results-area -->
+
+  </div><!-- /screen-report -->
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

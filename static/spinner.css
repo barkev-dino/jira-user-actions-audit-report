@@ -1,0 +1,15 @@
+/* spinner.css — CSS-only loading spinner */
+
+.spinner {
+  display: inline-block;
+  width: 36px;
+  height: 36px;
+  border: 3px solid #deebff;
+  border-top-color: #0052cc;
+  border-radius: 50%;
+  animation: spin .7s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
