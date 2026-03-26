@@ -256,6 +256,24 @@ async function handleGenerate() {
     return;
   }
 
+  // ── Parse and validate optional project filter ────────────────────────────
+  const projectErrorEl = document.getElementById('project-error');
+  if (projectErrorEl) { projectErrorEl.classList.add('hidden'); projectErrorEl.textContent = ''; }
+
+  const projectRaw  = (document.getElementById('project-filter')?.value || '').trim();
+  const projectKeys = projectRaw
+    ? projectRaw.split(',').map(k => k.trim().toUpperCase()).filter(k => k.length > 0)
+    : [];
+  const invalidKeys = projectKeys.filter(k => !/^[A-Z0-9_]+$/.test(k));
+  if (invalidKeys.length > 0) {
+    if (projectErrorEl) {
+      projectErrorEl.textContent =
+        `Invalid project key(s): ${invalidKeys.join(', ')} — use letters and numbers only (e.g. KAN, OPS).`;
+      projectErrorEl.classList.remove('hidden');
+    }
+    return;
+  }
+
   const rangeKey    = document.getElementById('range-select').value;
   const dateErrorEl = document.getElementById('date-error');
 
@@ -283,6 +301,7 @@ async function handleGenerate() {
     display_names:     Object.fromEntries(state.selectedUsers.map(u => [u.account_id, u.display_name])),
     range_key:         rangeKey,
     tz_offset_minutes: new Date().getTimezoneOffset(),
+    project_keys:      projectKeys,   // [] means no filter — search all projects
   };
 
   if (rangeKey === 'custom') {
@@ -654,7 +673,7 @@ function exportCSV() {
 
 // ─────────────────────────────────────────────────────────── UI helpers
 function setFormDisabled(disabled) {
-  ['btn-generate', 'range-select', 'user-search-input', 'date-start', 'date-end']
+  ['btn-generate', 'range-select', 'user-search-input', 'date-start', 'date-end', 'project-filter']
     .forEach(id => {
       const el = document.getElementById(id);
       if (el) el.disabled = disabled;

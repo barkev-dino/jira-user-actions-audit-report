@@ -179,6 +179,15 @@ async def start_report(body: ReportStartRequest, background_tasks: BackgroundTas
     elif body.range_key not in RANGE_MAP:
         raise HTTPException(status_code=400, detail=f"Unknown range_key: {body.range_key!r}")
 
+    # Light validation: project keys must be alphanumeric (Jira convention)
+    if body.project_keys:
+        invalid = [k for k in body.project_keys if not _re.match(r'^[A-Za-z0-9_]+$', k)]
+        if invalid:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid project key(s): {', '.join(invalid)}",
+            )
+
     job = job_store.create_job()
     background_tasks.add_task(
         _run_report_job,
@@ -189,6 +198,7 @@ async def start_report(body: ReportStartRequest, background_tasks: BackgroundTas
         end_date=body.end_date,
         tz_offset_minutes=body.tz_offset_minutes,
         display_names=body.display_names,
+        project_keys=body.project_keys,
         cfg=cfg,
     )
     return ReportStartResponse(job_id=job.job_id)
@@ -226,10 +236,24 @@ async def _run_report_job(
     job_id: str, account_ids: list, range_key: str, cfg: dict,
     start_date: Optional[str] = None, end_date: Optional[str] = None,
     tz_offset_minutes: int = 0, display_names: Optional[dict] = None,
+    project_keys: Optional[list] = None,
 ):
     """
-    Background task: uses the Jira REST API (JQL + changelog + comments) to
-    fetch complete, paginated activity for each user within the date range.
+    Background task: Jira REST API audit pipeline.
+
+    Pipeline (optimised):
+      Phase 0 — ONE JQL scan across all users to collect candidate issue keys.
+                Project filter applied here if provided.
+      Phase 1 — Fetch changelog + comments ONCE per unique issue key.
+      Phase 1b— Extract per-user events from the cached histories (in-memory).
+      Phase 2 — Per-user JQL for issues CREATED by that user (user-specific).
+
+    Why Phase 0 is not narrowed by user:
+      Standard Jira Cloud JQL has no "updated by user X" predicate. Proxies like
+      `reporter =` or `assignee was` would silently miss status changes / field
+      edits made by non-reporter/non-assignee users — producing false negatives in
+      an audit. The project filter IS safe to add and directly shrinks the set.
+      Python-side _row_in_window + author matching remain the authoritative filter.
     """
     job = job_store.get_job(job_id)
     if job is None:
@@ -237,14 +261,9 @@ async def _run_report_job(
 
     try:
         if range_key == "custom":
-            # Local calendar-day boundaries → UTC.
-            # from_date = start of selected start date in local tz
-            # to_date   = start of the day AFTER selected end date (exclusive upper bound)
             from_date = _local_midnight_utc(start_date, tz_offset_minutes)
             to_date   = _local_midnight_utc(end_date,   tz_offset_minutes) + timedelta(days=1)
         else:
-            # Preset: snap to local calendar midnight boundaries so "1 day" means
-            # today's full local day, "7 days" means the last 7 full local days, etc.
             now_utc   = datetime.now(timezone.utc)
             local_now = now_utc - timedelta(minutes=tz_offset_minutes)
             today_str = local_now.strftime("%Y-%m-%d")
@@ -252,36 +271,71 @@ async def _run_report_job(
             from_date = _local_midnight_utc(from_str,  tz_offset_minutes)
             to_date   = _local_midnight_utc(today_str, tz_offset_minutes) + timedelta(days=1)
 
-        # Record the exact UTC window so the frontend can display it.
         window_start_str = from_date.strftime("%Y-%m-%dT%H:%M:%SZ")
         window_end_str   = to_date.strftime("%Y-%m-%dT%H:%M:%SZ")
 
-        site_url    = cfg["site_url"]
-        total_users = len(account_ids)
+        site_url = cfg["site_url"]
 
-        # Use display names supplied by the frontend (already known from user-search).
-        # This avoids a redundant Jira API call per selected user.
         provided   = display_names or {}
         id_to_name: dict = {
             aid: provided.get(aid) or f"[{aid[:8]}…]"
             for aid in account_ids
         }
 
-        all_rows: list = []
+        # JQL date strings padded ±1 day to survive Jira's site-timezone evaluation.
+        jql_from_str = (from_date - timedelta(days=1)).strftime("%Y-%m-%d")
+        jql_to_str   = (to_date   + timedelta(days=1)).strftime("%Y-%m-%d")
 
-        for idx, account_id in enumerate(account_ids):
-            display_name  = id_to_name[account_id]
-            base_progress = 10 + int((idx / total_users) * 80)
-            progress_span = int(80 / total_users)
+        # Optional project filter — appended to every JQL query.
+        project_clause = _build_project_clause(project_keys)
 
-            job.update(f"Fetching activity for {display_name}…", base_progress)
+        # ── Phase 0: ONE JQL scan for all updated issues ──────────────────────
+        # Running once for all users avoids N redundant full-instance scans.
+        job.update("Scanning candidate issues…", 5)
+        await asyncio.sleep(0)
+        candidate_keys = await _collect_updated_keys(
+            jql_from_str, jql_to_str, project_clause, cfg, job,
+        )
+        total_issues = len(candidate_keys)
+
+        # ── Phase 1: fetch changelog + comments ONCE per unique issue ─────────
+        # For N selected users this replaces N×total_issues API calls with
+        # 1×total_issues calls — the dominant cost for multi-user reports.
+        issue_histories: dict = {}   # key → (changelog_list, comment_list)
+        for idx, key in enumerate(candidate_keys):
+            n   = idx + 1
+            pct = 15 + int((idx / max(total_issues, 1)) * 65)
+            job.update(f"{n}/{total_issues}|{key}|fetching history…", pct)
             await asyncio.sleep(0)
 
-            user_rows = await _fetch_user_activity_rest(
-                account_id, display_name, from_date, to_date,
-                cfg, job, base_progress, progress_span,
+            histories = await jira_client.fetch_issue_changelog(
+                site_url, cfg["email"], cfg["api_token"], key,
             )
-            all_rows.extend(user_rows)
+            comments  = await _fetch_all_issue_comments(
+                site_url, cfg["email"], cfg["api_token"], key,
+            )
+            issue_histories[key] = (histories, comments)
+
+        # ── Phase 1b: extract per-user events in-memory ───────────────────────
+        all_rows: list = []
+        for account_id in account_ids:
+            display_name = id_to_name[account_id]
+            rows = _extract_user_events(
+                account_id, display_name, issue_histories, from_date, to_date, site_url,
+            )
+            all_rows.extend(rows)
+
+        # ── Phase 2: issues CREATED by each user (user-specific JQL) ─────────
+        for account_id in account_ids:
+            display_name = id_to_name[account_id]
+            job.update(f"Fetching issues created by {display_name}…", 82)
+            await asyncio.sleep(0)
+            created = await _fetch_user_created_issues(
+                account_id, display_name,
+                from_date, to_date, jql_from_str, jql_to_str,
+                project_clause, cfg, job,
+            )
+            all_rows.extend(created)
 
         job.update("Building report table…", 98)
         await asyncio.sleep(0)
@@ -290,7 +344,6 @@ async def _run_report_job(
         job.finish(final_rows, window_start=window_start_str, window_end=window_end_str)
 
     except JiraAuthError as exc:
-        # Prefix lets the frontend distinguish auth failures from other errors
         job.fail(f"AUTH:{exc}")
     except Exception as exc:
         job.fail(str(exc))
@@ -318,95 +371,92 @@ def _local_midnight_utc(date_str: str, tz_offset_minutes: int) -> datetime:
     return utc_midnight.replace(tzinfo=timezone.utc)
 
 
-async def _fetch_user_activity_rest(
-    account_id: str,
-    display_name: str,
-    from_date: datetime,
-    to_date: datetime,
-    cfg: dict,
-    job,
-    base_progress: int,
-    progress_span: int,
+def _build_project_clause(project_keys: Optional[list]) -> str:
+    """Return a JQL AND fragment for project filtering, or '' if no filter."""
+    if not project_keys:
+        return ""
+    quoted = ", ".join(f'"{k}"' for k in project_keys)
+    return f' AND project in ({quoted})'
+
+
+async def _collect_updated_keys(
+    jql_from_str: str, jql_to_str: str,
+    project_clause: str, cfg: dict, job,
 ) -> list:
     """
-    Three-phase fetch:
-      Phase 0 — paginate JQL to collect all issue keys updated in the window.
-      Phase 1 — for each key fetch full changelog + comments, emit N/M progress.
-      Phase 2 — separately fetch issues created by this user in the window.
+    Phase 0: paginate JQL to collect all issue keys updated in the padded window.
+    Returns a deduped list preserving insertion order.
+    Called ONCE for all selected users combined.
     """
     site_url  = cfg["site_url"]
     email     = cfg["email"]
     api_token = cfg["api_token"]
     max_results = 50
-    rows: list  = []
 
-    # JQL date strings padded ±1 day to survive Jira's site-timezone interpretation.
-    # Jira evaluates date-only JQL in the site's configured timezone (not UTC), so
-    # a late-evening local event may appear as the next calendar day in Jira's JQL.
-    # The padding ensures we always scan a superset; _row_in_window is the authoritative filter.
-    jql_from_str = (from_date - timedelta(days=1)).strftime("%Y-%m-%d")
-    jql_to_str   = (to_date   + timedelta(days=1)).strftime("%Y-%m-%d")
-
-    # ── Phase 0: collect all issue keys updated in the window ─────────────────
-    jql_updated = (
-        f'updated >= "{jql_from_str}" AND updated <= "{jql_to_str}" '
-        f'ORDER BY updated DESC'
+    jql = (
+        f'updated >= "{jql_from_str}" AND updated <= "{jql_to_str}"'
+        f'{project_clause} ORDER BY updated DESC'
     )
+
     issue_keys: list = []
     next_token: Optional[str] = None
-    scan_page = 0
+    page = 0
 
     while True:
         try:
             data = await jira_client.search_issues_page(
-                site_url, email, api_token, jql_updated, next_token, max_results,
+                site_url, email, api_token, jql, next_token, max_results,
             )
         except JiraAuthError:
-            raise  # let _run_report_job catch it and set the AUTH: error
+            raise
         except Exception as exc:
-            job.update(f"⚠ Search error: {exc}", base_progress)
+            job.update(f"⚠ Search error: {exc}", 5)
             break
 
         issues = data.get("issues") or []
         if not issues:
             break
-        scan_page += 1
+        page += 1
         for iss in issues:
             k = iss.get("key")
             if k:
                 issue_keys.append(k)
 
-        next_token = data.get("nextPageToken")
-        job.update(
-            f"Scanning {display_name} · page {scan_page} · {len(issue_keys)} issues found…",
-            base_progress + 3,
-        )
+        job.update(f"Scanning issues · page {page} · {len(issue_keys)} found…", 8)
         await asyncio.sleep(0)
+
+        next_token = data.get("nextPageToken")
         if not next_token or len(issues) < max_results:
             break
 
     # Dedupe preserving order
-    seen_set: set = set()
-    unique_keys: list = []
+    seen: set = set()
+    unique: list = []
     for k in issue_keys:
-        if k not in seen_set:
-            seen_set.add(k)
-            unique_keys.append(k)
-    issue_keys  = unique_keys
-    total_issues = len(issue_keys)
+        if k not in seen:
+            seen.add(k)
+            unique.append(k)
+    return unique
 
-    # ── Phase 1: audit each issue's changelog and comments ───────────────────
-    for idx, key in enumerate(issue_keys):
-        n         = idx + 1
+
+def _extract_user_events(
+    account_id: str,
+    display_name: str,
+    issue_histories: dict,
+    from_date: datetime,
+    to_date: datetime,
+    site_url: str,
+) -> list:
+    """
+    Phase 1b (in-memory, no API calls): scan pre-fetched changelogs and comments
+    for events belonging to account_id within [from_date, to_date).
+    issue_histories: {key: (changelog_list, comment_list)}
+    """
+    rows: list = []
+    for key, (histories, comment_list) in issue_histories.items():
         project   = key.rsplit("-", 1)[0] if "-" in key else key
         issue_url = f"{site_url.rstrip('/')}/browse/{key}"
-        pct       = base_progress + 10 + int((idx / max(total_issues, 1)) * (progress_span - 20))
 
-        job.update(f"{n}/{total_issues}|{key}|fetching changelog…", pct)
-        await asyncio.sleep(0)
-        histories = await jira_client.fetch_issue_changelog(site_url, email, api_token, key)
-
-        cl_matches = 0
         for history in histories:
             if ((history.get("author") or {}).get("accountId")) != account_id:
                 continue
@@ -423,17 +473,7 @@ async def _fetch_user_activity_rest(
                 details=_format_changelog_items(items),
                 project=project, issue_url=issue_url,
             ))
-            cl_matches += 1
 
-        job.update(
-            f"{n}/{total_issues}|{key}|fetching comments"
-            f" ({len(histories)} cl, {cl_matches} matched)…",
-            pct,
-        )
-        await asyncio.sleep(0)
-        comment_list = await _fetch_all_issue_comments(site_url, email, api_token, key)
-
-        cm_matches = 0
         for comment in comment_list:
             if ((comment.get("author") or {}).get("accountId")) != account_id:
                 continue
@@ -450,35 +490,53 @@ async def _fetch_user_activity_rest(
                 details=f"Comment: {preview}" if preview else "Added comment",
                 project=project, issue_url=issue_url,
             ))
-            cm_matches += 1
 
-        job.update(
-            f"{n}/{total_issues}|{key}|done"
-            f" · cl:{cl_matches} cm:{cm_matches} · {len(rows)} events so far",
-            pct,
-        )
-        await asyncio.sleep(0)
+    return rows
 
-    # ── Phase 2: issues CREATED by this user in the window ───────────────────
-    jql_created = (
+
+async def _fetch_user_created_issues(
+    account_id: str,
+    display_name: str,
+    from_date: datetime,
+    to_date: datetime,
+    jql_from_str: str,
+    jql_to_str: str,
+    project_clause: str,
+    cfg: dict,
+    job,
+) -> list:
+    """
+    Phase 2: paginate JQL for issues CREATED by this user in the padded window.
+    This is already user-specific so runs per-user (but is typically very fast).
+    """
+    site_url  = cfg["site_url"]
+    email     = cfg["email"]
+    api_token = cfg["api_token"]
+    max_results = 50
+    rows: list  = []
+
+    jql = (
         f'reporter = "{account_id}" AND '
-        f'created >= "{jql_from_str}" AND created <= "{jql_to_str}" '
-        f'ORDER BY created DESC'
+        f'created >= "{jql_from_str}" AND created <= "{jql_to_str}"'
+        f'{project_clause} ORDER BY created DESC'
     )
-    next_token2: Optional[str] = None
+    next_token: Optional[str] = None
+
     while True:
         try:
-            data2 = await jira_client.search_created_issues_page(
-                site_url, email, api_token, jql_created, next_token2, max_results,
+            data = await jira_client.search_created_issues_page(
+                site_url, email, api_token, jql, next_token, max_results,
             )
         except JiraAuthError:
-            raise  # let _run_report_job catch it and set the AUTH: error
+            raise
         except Exception:
             break
-        issues2 = data2.get("issues") or []
-        if not issues2:
+
+        issues = data.get("issues") or []
+        if not issues:
             break
-        for issue in issues2:
+
+        for issue in issues:
             key = issue.get("key", "")
             if not key:
                 continue
@@ -495,8 +553,9 @@ async def _fetch_user_activity_rest(
                 project=project,
                 issue_url=f"{site_url.rstrip('/')}/browse/{key}",
             ))
-        next_token2 = data2.get("nextPageToken")
-        if not next_token2 or len(issues2) < max_results:
+
+        next_token = data.get("nextPageToken")
+        if not next_token or len(issues) < max_results:
             break
 
     return rows

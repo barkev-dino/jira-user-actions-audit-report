@@ -280,9 +280,18 @@ body {
   color: var(--text-subtle);
 }
 
-.rfi-users { flex: 1 1 240px; min-width: 200px; }
-.rfi-range { flex: 0 0 auto; }
+.rfi-users    { flex: 1 1 240px; min-width: 200px; }
+.rfi-range    { flex: 0 0 auto; }
+.rfi-project  { flex: 0 1 180px; min-width: 120px; }
 .rfi-btn-wrap { flex: 0 0 auto; }
+
+.rfi-optional {
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--text-subtle);
+  text-transform: none;
+  letter-spacing: 0;
+}
 
 .rfi-btn {
   width: auto !important;

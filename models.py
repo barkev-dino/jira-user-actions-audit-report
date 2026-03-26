@@ -57,11 +57,12 @@ class UserSearchResponse(BaseModel):
 
 class ReportStartRequest(BaseModel):
     account_ids: List[str]
-    range_key: str = "7d"          # "1d"|"2d"|"3d"|"7d"|"30d"|"custom"
+    range_key: str = "7d"              # "1d"|"2d"|"3d"|"7d"|"30d"|"custom"
     start_date: Optional[str] = None   # "YYYY-MM-DD" — required when range_key == "custom"
     end_date:   Optional[str] = None   # "YYYY-MM-DD" — required when range_key == "custom"
     tz_offset_minutes: int = 0         # new Date().getTimezoneOffset() — +240 for UTC-4 (EDT)
     display_names: dict = {}           # {account_id: display_name} — supplied by frontend
+    project_keys: List[str] = []       # optional project filter, e.g. ["KAN", "OPS"]
 
 
 class ReportStartResponse(BaseModel):
