@@ -241,19 +241,18 @@ async def _run_report_job(
     """
     Background task: Jira REST API audit pipeline.
 
-    Pipeline (optimised):
-      Phase 0 — ONE JQL scan across all users to collect candidate issue keys.
-                Project filter applied here if provided.
-      Phase 1 — Fetch changelog + comments ONCE per unique issue key.
-      Phase 1b— Extract per-user events from the cached histories (in-memory).
+    Pipeline:
+      Phase 0 — Per-user JQL scan using updatedBy() to collect candidate keys.
+                Keys are unioned and deduped across all selected users.
+                Optional project filter applied here to shrink the set further.
+      Phase 1 — Fetch changelog + comments ONCE per unique candidate key.
+      Phase 1b— Extract per-user events in-memory (no API calls).
       Phase 2 — Per-user JQL for issues CREATED by that user (user-specific).
 
-    Why Phase 0 is not narrowed by user:
-      Standard Jira Cloud JQL has no "updated by user X" predicate. Proxies like
-      `reporter =` or `assignee was` would silently miss status changes / field
-      edits made by non-reporter/non-assignee users — producing false negatives in
-      an audit. The project filter IS safe to add and directly shrinks the set.
-      Python-side _row_in_window + author matching remain the authoritative filter.
+    updatedBy(accountId, dateFrom, dateTo) is an Atlassian-documented Jira Cloud
+    JQL function covering field changes, status transitions, comments, and creation.
+    It is day-granular only — the ±1-day padded JQL dates ensure boundary events
+    are not omitted. Python-side _row_in_window remains the exact final filter.
     """
     job = job_store.get_job(job_id)
     if job is None:
@@ -286,16 +285,31 @@ async def _run_report_job(
         jql_from_str = (from_date - timedelta(days=1)).strftime("%Y-%m-%d")
         jql_to_str   = (to_date   + timedelta(days=1)).strftime("%Y-%m-%d")
 
-        # Optional project filter — appended to every JQL query.
+        # Optional project filter clause — reused in Phase 0 and Phase 2.
         project_clause = _build_project_clause(project_keys)
 
-        # ── Phase 0: ONE JQL scan for all updated issues ──────────────────────
-        # Running once for all users avoids N redundant full-instance scans.
-        job.update("Scanning candidate issues…", 5)
-        await asyncio.sleep(0)
-        candidate_keys = await _collect_updated_keys(
-            jql_from_str, jql_to_str, project_clause, cfg, job,
-        )
+        # ── Phase 0: per-user updatedBy() scan, union across users ───────────
+        # updatedBy() narrows candidates to issues the user actually touched,
+        # replacing a broad "all updated issues" scan.  Running one query per
+        # user and unioning the results avoids fetching irrelevant issue histories.
+        total_users    = len(account_ids)
+        seen_keys: set = set()
+        candidate_keys: list = []
+
+        for u_idx, account_id in enumerate(account_ids):
+            display_name = id_to_name[account_id]
+            pct_base     = 5 + int((u_idx / total_users) * 10)
+            job.update(f"Scanning candidates for {display_name}…", pct_base)
+            await asyncio.sleep(0)
+
+            jql      = _build_candidate_jql(account_id, jql_from_str, jql_to_str, project_keys)
+            user_keys = await _paginate_issue_keys(jql, cfg, job, pct_base)
+
+            for k in user_keys:
+                if k not in seen_keys:
+                    seen_keys.add(k)
+                    candidate_keys.append(k)
+
         total_issues = len(candidate_keys)
 
         # ── Phase 1: fetch changelog + comments ONCE per unique issue ─────────
@@ -379,25 +393,47 @@ def _build_project_clause(project_keys: Optional[list]) -> str:
     return f' AND project in ({quoted})'
 
 
-async def _collect_updated_keys(
-    jql_from_str: str, jql_to_str: str,
-    project_clause: str, cfg: dict, job,
+def _build_candidate_jql(
+    account_id: str,
+    jql_from_str: str,
+    jql_to_str: str,
+    project_keys: Optional[list],
+) -> str:
+    """
+    Build a JQL query using updatedBy() to find candidate issues for one user.
+
+    updatedBy(user, dateFrom, dateTo) is an Atlassian-documented Jira Cloud JQL
+    function that matches issues where the specified user:
+      - created the issue
+      - updated any field
+      - created, edited, or deleted a comment
+    This covers all action types this app audits.
+
+    Day-granular precision only: jql_from_str / jql_to_str are already padded by
+    ±1 day so boundary events are not missed at the JQL level.  Python-side
+    _row_in_window performs the exact timestamp inclusion check.
+
+    With project filter:   project in ("KAN", "OPS") AND issuekey in updatedBy(...)
+    Without project filter: issuekey in updatedBy(...)
+    """
+    upd = f'issuekey in updatedBy("{account_id}", "{jql_from_str}", "{jql_to_str}")'
+    if project_keys:
+        quoted = ", ".join(f'"{k}"' for k in project_keys)
+        return f'project in ({quoted}) AND {upd} ORDER BY updated DESC'
+    return f'{upd} ORDER BY updated DESC'
+
+
+async def _paginate_issue_keys(
+    jql: str, cfg: dict, job, progress_pct: int
 ) -> list:
     """
-    Phase 0: paginate JQL to collect all issue keys updated in the padded window.
-    Returns a deduped list preserving insertion order.
-    Called ONCE for all selected users combined.
+    Generic JQL paginator — returns a deduped list of issue keys from a JQL query.
+    Used by Phase 0 for each user's updatedBy() candidate scan.
     """
-    site_url  = cfg["site_url"]
-    email     = cfg["email"]
-    api_token = cfg["api_token"]
+    site_url    = cfg["site_url"]
+    email       = cfg["email"]
+    api_token   = cfg["api_token"]
     max_results = 50
-
-    jql = (
-        f'updated >= "{jql_from_str}" AND updated <= "{jql_to_str}"'
-        f'{project_clause} ORDER BY updated DESC'
-    )
-
     issue_keys: list = []
     next_token: Optional[str] = None
     page = 0
@@ -410,7 +446,7 @@ async def _collect_updated_keys(
         except JiraAuthError:
             raise
         except Exception as exc:
-            job.update(f"⚠ Search error: {exc}", 5)
+            job.update(f"⚠ Search error: {exc}", progress_pct)
             break
 
         issues = data.get("issues") or []
@@ -422,7 +458,7 @@ async def _collect_updated_keys(
             if k:
                 issue_keys.append(k)
 
-        job.update(f"Scanning issues · page {page} · {len(issue_keys)} found…", 8)
+        job.update(f"page {page} · {len(issue_keys)} found…", progress_pct)
         await asyncio.sleep(0)
 
         next_token = data.get("nextPageToken")
