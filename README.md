@@ -2,6 +2,8 @@
 
 A local web app that produces a complete, field-level audit of Jira user activity using the Jira Cloud REST API. Select one or more users, choose a date range, and get a sortable, filterable, exportable table of every action they took — with exact timestamps, field-level change details, and a per-user summary matrix.
 
+![Example report output showing summary matrix and activity table](docs/example_screenshot.png)
+
 ---
 
 ## Download and Run (no git required)
