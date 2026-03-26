@@ -64,7 +64,7 @@ RANGE_MAP = {
 async def serve_index():
     """Serve the single-page frontend."""
     html_path = BASE_DIR / "templates" / "index.html"
-    return HTMLResponse(content=html_path.read_text(), status_code=200)
+    return HTMLResponse(content=html_path.read_text(encoding="utf-8"), status_code=200)
 
 
 @app.get("/api/status", response_model=StatusResponse)

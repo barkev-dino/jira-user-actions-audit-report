@@ -26,7 +26,7 @@ def save_config(site_url: str, email: str, api_token: str, display_name: str, ac
     }
     tmp = CONFIG_PATH.with_suffix(".tmp")
     try:
-        tmp.write_text(json.dumps(data, indent=2))
+        tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
         os.chmod(tmp, 0o600)
         tmp.replace(CONFIG_PATH)  # atomic on POSIX; best-effort on Windows
     except Exception:
@@ -43,7 +43,7 @@ def load_config() -> Optional[dict]:
     Never raises — always returns dict or None.
     """
     try:
-        text = CONFIG_PATH.read_text()
+        text = CONFIG_PATH.read_text(encoding="utf-8")
     except FileNotFoundError:
         return None
     except Exception:

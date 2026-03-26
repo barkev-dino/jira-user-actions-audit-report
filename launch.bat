@@ -1,6 +1,10 @@
 @echo off
 title Jira Audit Report
 
+:: Always run from the folder this script lives in,
+:: regardless of how it was launched (double-click, taskbar pin, etc.)
+cd /d "%~dp0"
+
 :: ── Check Python is installed ────────────────────────────────────────────────
 python --version >nul 2>&1
 if errorlevel 1 (
@@ -26,7 +30,7 @@ if not exist ".venv\Scripts\activate.bat" (
 call .venv\Scripts\activate.bat
 
 :: ── Install / update dependencies ────────────────────────────────────────────
-pip install -r requirements.txt --quiet
+python -m pip install -r requirements.txt --quiet
 if errorlevel 1 (
     echo Failed to install dependencies.
     pause
@@ -34,11 +38,11 @@ if errorlevel 1 (
 )
 
 :: ── Open browser after a short delay ─────────────────────────────────────────
-start "" /b cmd /c "timeout /t 2 >nul && start http://localhost:8000"
+start "" /b cmd /c "timeout /t 3 >nul && start http://localhost:8000"
 
 :: ── Start the server ─────────────────────────────────────────────────────────
 echo.
 echo Jira Audit is running at http://localhost:8000
 echo Press Ctrl+C to stop.
 echo.
-uvicorn app:app --port 8000
+python -m uvicorn app:app --port 8000
