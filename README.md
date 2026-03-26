@@ -27,46 +27,34 @@ If you see a version number (3.9 or higher), skip to Step 3.
 
 If not, download and install Python from **[https://www.python.org/downloads](https://www.python.org/downloads)** — check **"Add Python to PATH"** during installation on Windows.
 
-### Step 3 — Install dependencies
+### Step 3 — Run the app
 
-In your terminal, navigate into the unzipped folder and install the required packages:
+**Windows — double-click launcher:**
 
-**Mac / Linux:**
+Simply double-click **`launch.bat`** inside the unzipped folder. It will:
+- Install all dependencies automatically (first run only)
+- Start the server
+- Open your browser to the app
+
+> If Windows shows a security warning ("Windows protected your PC"), click **More info → Run anyway**. This appears because the file isn't code-signed.
+
+**Mac / Linux — terminal:**
 ```bash
 cd jira-user-actions-audit-report-main
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-```
-
-**Windows:**
-```cmd
-cd jira-user-actions-audit-report-main
-python -m venv .venv
-.venv\Scripts\activate
-pip install -r requirements.txt
-```
-
-### Step 4 — Start the app
-
-**Mac / Linux:**
-```bash
 uvicorn app:app --port 8000
 ```
 
-**Windows:**
-```cmd
-uvicorn app:app --port 8000
-```
+### Step 4 — Open in your browser
 
-### Step 5 — Open in your browser
-
-Go to: **[http://localhost:8000](http://localhost:8000)**
+The browser should open automatically on Windows. If not, go to: **[http://localhost:8000](http://localhost:8000)**
 
 You'll see the setup screen. Enter your Jira site URL, email, and API token to get started (see [First Use — Auth Setup](#first-use--auth-setup) below).
 
-> **To stop the app**, go back to the terminal and press `Ctrl+C`.
-> **Next time**, just repeat Steps 3–5 (skip `pip install` after the first time — just activate the venv and run `uvicorn`).
+> **To stop the app**, close the terminal window or press `Ctrl+C`.
+> **Next time on Windows**, just double-click `launch.bat` again — setup is skipped after the first run.
 
 ---
 
