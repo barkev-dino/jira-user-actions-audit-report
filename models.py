@@ -1,5 +1,5 @@
 """
-models.py — Pydantic request/response models for the Jira audit app.
+models.py — Pydantic request/response models for the Tickets Touched Report app.
 """
 
 from pydantic import BaseModel

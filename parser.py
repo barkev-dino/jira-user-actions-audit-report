@@ -1,5 +1,5 @@
 """
-parser.py — Post-processing helpers for Jira audit report rows.
+parser.py — Post-processing helpers for Tickets Touched Report rows.
 """
 
 from datetime import datetime, timezone

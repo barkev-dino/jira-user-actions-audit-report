@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Jira Audit</title>
+  <title>Tickets Touched Report</title>
   <link rel="stylesheet" href="/static/styles.css" />
   <link rel="stylesheet" href="/static/spinner.css" />
 </head>
@@ -12,7 +12,7 @@
   <!-- ═══════════════════════════════════════════════════════ SETUP SCREEN -->
   <div id="screen-setup" class="screen hidden">
     <div class="card setup-card">
-      <h1 class="app-title">Jira Audit</h1>
+      <h1 class="app-title">Tickets Touched Report</h1>
       <p class="subtitle">Connect to your Jira Cloud instance to get started.</p>
 
       <div class="setup-tip">
@@ -57,7 +57,7 @@
 
     <!-- Top bar -->
     <header class="topbar">
-      <span class="app-title-small">Jira Audit</span>
+      <span class="app-title-small">Tickets Touched Report</span>
       <span id="connection-badge" class="badge badge-green"></span>
       <button class="btn btn-ghost btn-sm" onclick="handleDisconnect()">Disconnect</button>
     </header>
@@ -107,9 +107,9 @@
               <option value="custom">Custom…</option>
             </select>
             <div id="date-inputs" class="date-inputs hidden">
-              <input id="date-start" type="date" />
+              <input id="date-start" type="date" onchange="saveFormState()" />
               <span class="date-sep">→</span>
-              <input id="date-end" type="date" />
+              <input id="date-end" type="date" onchange="saveFormState()" />
             </div>
           </div>
           <div id="date-error" class="error-msg hidden" style="margin-top:4px"></div>
@@ -123,15 +123,21 @@
             type="text"
             placeholder="KAN, OPS, ENG"
             autocomplete="off"
+            oninput="saveFormState()"
           />
         </div>
 
-        <!-- Generate button -->
+        <!-- Generate / Clear buttons -->
         <div class="rfi-field rfi-btn-wrap">
           <label>&nbsp;</label>
-          <button id="btn-generate" class="btn btn-primary rfi-btn" onclick="handleGenerate()">
-            Generate
-          </button>
+          <div class="rfi-btn-group">
+            <button id="btn-generate" class="btn btn-primary rfi-btn" onclick="handleGenerate()">
+              Generate
+            </button>
+            <button class="btn btn-ghost btn-sm rfi-clear-btn" onclick="clearFormState()" title="Clear all fields">
+              Clear
+            </button>
+          </div>
         </div>
 
       </div>
@@ -139,6 +145,64 @@
       <!-- Project key validation error -->
       <div id="project-error" class="error-msg hidden" style="margin-top:8px"></div>
     </div>
+
+    <!-- ── Scheduled Reports panel ───────────────────────────────────────── -->
+    <div class="card report-card sched-card">
+
+      <!-- Header row — always visible -->
+      <div class="sched-header" onclick="toggleScheduler()">
+        <span class="sched-title">Scheduled Reports</span>
+        <span id="sched-status-badge" class="sched-badge sched-badge-off">Off</span>
+        <span id="sched-chevron" class="sched-chevron">▸</span>
+      </div>
+
+      <!-- Collapsible body -->
+      <div id="sched-body" class="sched-body hidden">
+
+        <div class="sched-row">
+
+          <!-- Enable toggle -->
+          <div class="sched-field">
+            <label class="sched-label">Enable</label>
+            <label class="toggle-switch">
+              <input type="checkbox" id="sched-enabled" onchange="handleSchedEnabledChange(); saveSchedDraft()" />
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+
+          <!-- Run time -->
+          <div class="sched-field">
+            <label class="sched-label">Run daily at</label>
+            <input id="sched-time" type="time" value="07:00" class="sched-input-sm" onchange="saveSchedDraft()" />
+          </div>
+
+          <!-- Run until -->
+          <div class="sched-field">
+            <label class="sched-label">Run until</label>
+            <input id="sched-until" type="date" class="sched-input-sm" onchange="saveSchedDraft()" />
+          </div>
+
+        </div>
+
+        <p class="sched-uses-form">
+          Users, projects, and date range are taken from the report form above when the schedule runs.
+        </p>
+
+        <!-- Action row -->
+        <div class="sched-actions">
+          <button id="sched-save-btn" class="btn btn-primary sched-save-btn" onclick="saveSchedule()">Save Schedule</button>
+        </div>
+
+        <!-- Status line -->
+        <div id="sched-status-line" class="sched-status-line hidden"></div>
+
+        <p class="sched-note">
+          The scheduler runs only while this server is running.
+          CSV files are saved to the <code>reports/</code> folder inside the app directory.
+        </p>
+
+      </div><!-- /sched-body -->
+    </div><!-- /sched-card -->
 
     <!-- Inline report error — replaces alert() for generation failures -->
     <div id="report-error" class="report-error-msg hidden"></div>

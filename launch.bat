@@ -1,5 +1,5 @@
 @echo off
-title Jira Audit Report
+title Tickets Touched Report
 
 :: Always run from the folder this script lives in,
 :: regardless of how it was launched (double-click, taskbar pin, etc.)
@@ -42,7 +42,7 @@ start "" /b cmd /c "timeout /t 3 >nul && start http://localhost:8000"
 
 :: ── Start the server ─────────────────────────────────────────────────────────
 echo.
-echo Jira Audit is running at http://localhost:8000
+echo Tickets Touched Report is running at http://localhost:8000
 echo Press Ctrl+C to stop.
 echo.
 python -m uvicorn app:app --port 8000

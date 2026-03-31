@@ -1,5 +1,5 @@
 """
-app.py — FastAPI application: routes, startup, and background job runner.
+app.py — FastAPI application for Tickets Touched Report: routes, startup, and background job runner.
 
 Report source: Jira REST API (JQL + per-issue changelog + comments).
 The Jira Activity Stream is NOT used — it is a curated feed with server-side
@@ -14,15 +14,22 @@ Routes:
   GET  /api/users/search?q=    -> search Jira users
   POST /api/report/start       -> start a report job
   GET  /api/report/{job_id}    -> poll job status / get results
+  GET  /api/schedule           -> get saved schedule config + last-run info
+  POST /api/schedule           -> save schedule config (and reschedule APScheduler job)
 """
 
 import asyncio
+import csv
+import io
 import re as _re
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
 import httpx
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
 from fastapi import FastAPI, HTTPException, Query, BackgroundTasks
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -32,6 +39,7 @@ import jira_client
 from jira_client import JiraAuthError
 import job_store
 import parser as feed_parser
+import schedule_store
 from models import (
     AuthTestRequest, AuthTestResponse, AuthTestUser,
     ReportRow,
@@ -42,9 +50,23 @@ from models import (
 
 # ------------------------------------------------------------------ app setup
 
-BASE_DIR = Path(__file__).parent
+BASE_DIR    = Path(__file__).parent
+REPORTS_DIR = BASE_DIR / "reports"
 
-app = FastAPI(title="Jira Audit App")
+_scheduler = AsyncIOScheduler()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Start APScheduler on startup; shut it down cleanly on exit."""
+    REPORTS_DIR.mkdir(exist_ok=True)
+    _scheduler.start()
+    _apply_schedule()          # load saved config and arm the cron job (if any)
+    yield
+    _scheduler.shutdown(wait=False)
+
+
+app = FastAPI(title="Tickets Touched Report", lifespan=lifespan)
 
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 
@@ -230,6 +252,37 @@ async def get_report(job_id: str):
     )
 
 
+# ------------------------------------------------------------------ schedule routes
+
+@app.get("/api/schedule")
+async def get_schedule():
+    """Return saved schedule config, last-run record, and next scheduled fire time."""
+    job      = _scheduler.get_job("scheduled_report")
+    next_run = None
+    if job and job.next_run_time:
+        next_run = job.next_run_time.isoformat()
+    return {
+        "config":   schedule_store.load_schedule(),
+        "last_run": schedule_store.load_last_run(),
+        "next_run": next_run,
+    }
+
+
+@app.post("/api/schedule")
+async def save_schedule(body: dict):
+    """Persist schedule config and rearm the APScheduler cron job."""
+    required = {"enabled", "run_time", "run_until", "range_key",
+                "account_ids", "display_names", "project_keys"}
+    if not required.issubset(body.keys()):
+        raise HTTPException(status_code=400, detail="Missing required schedule fields")
+    try:
+        schedule_store.save_schedule(body)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    _apply_schedule()
+    return {"ok": True}
+
+
 # ------------------------------------------------------------------ background job
 
 async def _run_report_job(
@@ -363,6 +416,160 @@ async def _run_report_job(
         job.fail(str(exc))
 
 
+# ------------------------------------------------------------------ scheduler helpers
+
+def _apply_schedule() -> None:
+    """
+    Read the saved schedule config and (re)arm the APScheduler cron job.
+    Called on startup and every time the schedule is saved via the UI.
+    """
+    _scheduler.remove_all_jobs()
+    cfg = schedule_store.load_schedule()
+    if not cfg or not cfg.get("enabled"):
+        return
+
+    run_until = cfg.get("run_until", "")
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    if run_until and run_until < today_str:
+        return  # expired — don't arm
+
+    run_time = cfg.get("run_time", "07:00")
+    try:
+        hour, minute = [int(x) for x in run_time.split(":")]
+    except (ValueError, AttributeError):
+        hour, minute = 7, 0
+
+    _scheduler.add_job(
+        _run_scheduled_report,
+        trigger=CronTrigger(hour=hour, minute=minute),
+        id="scheduled_report",
+        replace_existing=True,
+        misfire_grace_time=1800,   # run if server starts within 30 min of scheduled time
+    )
+
+
+async def _run_scheduled_report() -> None:
+    """
+    APScheduler callback: run the report for saved schedule config,
+    save results as a CSV in reports/, and write the last-run record.
+    """
+    cfg      = schedule_store.load_schedule()
+    jira_cfg = config_store.load_config()
+
+    if not cfg or not jira_cfg:
+        schedule_store.save_last_run(
+            ran_at=datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+            rows=0, ok=False,
+            error="Missing schedule or Jira config — open the app to configure.",
+        )
+        return
+
+    # Check run_until again at fire time (user may have updated the date)
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    if cfg.get("run_until", "") < today_str:
+        return  # silently skip expired runs
+
+    ran_at = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+
+    try:
+        # Use local timezone offset at fire time (server is local machine)
+        local_offset = -int(datetime.now().astimezone().utcoffset().total_seconds() / 60)
+
+        account_ids   = cfg.get("account_ids", [])
+        display_names = cfg.get("display_names", {})
+        range_key     = cfg.get("range_key", "1d")
+        project_keys  = cfg.get("project_keys", [])
+
+        if not account_ids:
+            raise ValueError("No users configured in schedule")
+
+        # Compute date window
+        if range_key == "custom":
+            raise ValueError("Custom date range is not supported for scheduled runs; use a preset.")
+
+        now_utc   = datetime.now(timezone.utc)
+        local_now = now_utc - timedelta(minutes=local_offset)
+        today_s   = local_now.strftime("%Y-%m-%d")
+        from_s    = (local_now - RANGE_MAP[range_key]).strftime("%Y-%m-%d")
+        from_date = _local_midnight_utc(from_s,   local_offset)
+        to_date   = _local_midnight_utc(today_s,  local_offset) + timedelta(days=1)
+
+        jql_from_str   = (from_date - timedelta(days=1)).strftime("%Y-%m-%d")
+        jql_to_str     = (to_date   + timedelta(days=1)).strftime("%Y-%m-%d")
+        project_clause = _build_project_clause(project_keys)
+
+        # Run the full pipeline (same as manual run)
+        candidate_keys = await _collect_candidate_keys(
+            account_ids, jql_from_str, jql_to_str, project_keys, jira_cfg,
+        )
+
+        issue_histories: dict = {}
+        for key in candidate_keys:
+            histories = await jira_client.fetch_issue_changelog(
+                jira_cfg["site_url"], jira_cfg["email"], jira_cfg["api_token"], key,
+            )
+            comments = await _fetch_all_issue_comments(
+                jira_cfg["site_url"], jira_cfg["email"], jira_cfg["api_token"], key,
+            )
+            issue_histories[key] = (histories, comments)
+
+        all_rows: list = []
+        id_to_name = {
+            aid: display_names.get(aid) or f"[{aid[:8]}…]"
+            for aid in account_ids
+        }
+        for account_id in account_ids:
+            all_rows.extend(_extract_user_events(
+                account_id, id_to_name[account_id],
+                issue_histories, from_date, to_date, jira_cfg["site_url"],
+            ))
+
+        for account_id in account_ids:
+            created = await _fetch_user_created_issues(
+                account_id, id_to_name[account_id],
+                from_date, to_date, jql_from_str, jql_to_str,
+                project_clause, jira_cfg, None,
+            )
+            all_rows.extend(created)
+
+        final_rows = feed_parser.dedupe_and_sort(all_rows)
+        _save_rows_as_csv(final_rows, ran_at)
+
+        schedule_store.save_last_run(
+            ran_at=ran_at, rows=len(final_rows), ok=True,
+        )
+
+    except Exception as exc:
+        schedule_store.save_last_run(
+            ran_at=ran_at, rows=0, ok=False, error=str(exc),
+        )
+
+
+def _save_rows_as_csv(rows: list, ran_at: str) -> None:
+    """
+    Write report rows to reports/tickets_touched_YYYY-MM-DD_HH-MM.csv atomically.
+    Each run gets its own file. Writes to a .tmp first then renames so the file
+    is either complete or absent, never partially written.
+    """
+    REPORTS_DIR.mkdir(exist_ok=True)
+    # ran_at is "2026-03-30T07:00:00" — convert to "2026-03-30_07-00" for the filename
+    file_ts  = ran_at[:16].replace("T", "_").replace(":", "-")
+    out_path = REPORTS_DIR / f"tickets_touched_{file_ts}.csv"
+    tmp_path = out_path.with_suffix(".tmp")
+    headers  = ["Timestamp", "User", "Issue Key", "Action Type",
+                "Details", "Project", "Issue URL"]
+    buf = io.StringIO()
+    writer = csv.writer(buf, quoting=csv.QUOTE_ALL)
+    writer.writerow(headers)
+    for row in rows:
+        writer.writerow([
+            row.timestamp, row.user, row.issue_key,
+            row.action_type, row.details, row.project, row.issue_url,
+        ])
+    tmp_path.write_text(buf.getvalue(), encoding="utf-8")
+    tmp_path.replace(out_path)  # atomic on POSIX; best-effort on Windows
+
+
 # ------------------------------------------------------------------ date helpers
 
 def _local_midnight_utc(date_str: str, tz_offset_minutes: int) -> datetime:
@@ -472,6 +679,49 @@ async def _paginate_issue_keys(
         if k not in seen:
             seen.add(k)
             unique.append(k)
+    return unique
+
+
+async def _collect_candidate_keys(
+    account_ids: list,
+    jql_from_str: str,
+    jql_to_str: str,
+    project_keys: Optional[list],
+    cfg: dict,
+) -> list:
+    """
+    Job-free version of Phase 0 for the scheduler (no progress updates needed).
+    Runs one updatedBy() JQL per user, unions and dedupes the result.
+    """
+    site_url    = cfg["site_url"]
+    email       = cfg["email"]
+    api_token   = cfg["api_token"]
+    max_results = 50
+    seen: set   = set()
+    unique: list = []
+
+    for account_id in account_ids:
+        jql        = _build_candidate_jql(account_id, jql_from_str, jql_to_str, project_keys)
+        next_token: Optional[str] = None
+        while True:
+            try:
+                data = await jira_client.search_issues_page(
+                    site_url, email, api_token, jql, next_token, max_results,
+                )
+            except JiraAuthError:
+                raise
+            except Exception:
+                break
+            issues = data.get("issues") or []
+            for iss in issues:
+                k = iss.get("key")
+                if k and k not in seen:
+                    seen.add(k)
+                    unique.append(k)
+            next_token = data.get("nextPageToken")
+            if not next_token or len(issues) < max_results:
+                break
+
     return unique
 
 

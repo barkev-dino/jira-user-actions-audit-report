@@ -1,6 +1,6 @@
-# Jira User Actions Audit Report
+# Tickets Touched Report
 
-A local web app that produces a complete, field-level audit of Jira user activity using the Jira Cloud REST API. Select one or more users, choose a date range, and get a sortable, filterable, exportable table of every action they took — with exact timestamps, field-level change details, and a per-user summary matrix.
+A local web app that shows you exactly which Jira tickets each team member touched and what they did — using the Jira Cloud REST API. Select one or more users, choose a date range, and get a sortable, filterable, exportable table of every action they took — with exact timestamps, field-level change details, and a per-user summary matrix.
 
 ![Example report output showing summary matrix and activity table](docs/example_screenshot.png)
 
@@ -123,10 +123,11 @@ On every subsequent page load, `/api/status` re-verifies the saved credentials l
 
 1. Type at least **2 characters** in the **Users** box — results come from `/rest/api/3/user/search`.
 2. Click a result to add it as a chip. Add as many users as you like.
-3. Choose a **Time Range**:
+3. Optionally enter one or more **Project keys** (comma-separated, e.g. `KAN, OPS`) to limit the scan. Leave blank to search all projects.
+4. Choose a **Time Range**:
    - **Presets** (1 day, 2 days, 3 days, 1 week, 30 days) — snaps to local calendar midnight boundaries. "1 day" = today's full local day; "7 days" = the last 7 full local days including today.
    - **Custom…** — reveals a date picker. Select any start and end date; the filter covers the full local days selected (midnight-to-midnight in your browser's timezone).
-4. Click **Generate Report**.
+5. Click **Generate Report**.
 
 The app runs a background job that:
 - Scans all issues updated in the window via JQL (paginated, ±1 day buffer)
@@ -135,6 +136,45 @@ The app runs a background job that:
 - Streams progress updates (`Issue N/M · KEY · fetching changelog…`)
 
 Once complete, the **filter window** is displayed under the Summary heading — exact local-time boundaries used for the query, so you always know what was and wasn't included.
+
+### Form persistence and clearing
+
+All report form fields — selected users, time range, project filter, and custom dates — are **automatically saved to browser localStorage** and restored on the next page load. You never need to re-enter your selections after a refresh.
+
+To reset everything, click the **Clear** button next to **Generate**. This removes saved form state and resets all fields to their defaults.
+
+---
+
+## Scheduled Reports
+
+The app can run reports on a daily schedule and save the results as CSV files to the `reports/` subfolder inside the app directory.
+
+### Setting up a schedule
+
+1. Click **Scheduled Reports** to expand the scheduler panel.
+2. **Toggle Enable** to turn scheduling on.
+3. Set **Run daily at** — the local time the report should run each day (e.g. `07:00`).
+4. Set **Run until** — a date after which the scheduler stops automatically. Required.
+5. Click **Save Schedule**.
+
+> **Users, projects, and date range** are taken from the main report form above at the time you click Save Schedule. Set those fields first, then save the schedule.
+
+On save, the button briefly turns **green and shows "Saved ✓"** as confirmation.
+
+### Schedule behavior
+
+- The scheduler runs **inside the server process** using APScheduler. It requires the server to be running at the scheduled time — if the server is stopped, the run is skipped.
+- Each run generates a new CSV file named `tickets_touched_YYYY-MM-DD_HH-MM.csv` in the `reports/` folder. Files are written atomically (temp file → rename) so partial files are never left behind.
+- The **status line** below the Save button always shows the last run outcome (rows saved or error) and the next scheduled run time. It refreshes automatically every **20 seconds** while the scheduler panel is open — no manual refresh needed.
+- The scheduler panel remembers its **open/closed state** and all field values (enabled toggle, run time, run until) across page reloads via localStorage.
+
+### Schedule storage
+
+The schedule configuration is saved to `~/.jira_audit_schedule.json` and the last-run record to `~/.jira_audit_last_run.json`. These files persist across server restarts — on startup the scheduler automatically re-arms any active schedule.
+
+### Disabling the schedule
+
+Uncheck **Enable**, then click **Save Schedule**. The status badge in the header row changes from **On** (green) to **Off** (grey). If the run-until date has passed, the badge shows **Expired** (amber) regardless of the enable toggle.
 
 ---
 
@@ -190,13 +230,16 @@ Status transitions to Resolved, Closed, or Reopened are all classified as `statu
 
 ```
 jira_user_audit_report/
-├── app.py              FastAPI routes, background job runner, REST report logic
+├── app.py              FastAPI routes, background job runner, REST report logic, APScheduler
 ├── jira_client.py      Jira REST: auth verify, user search, JQL, changelog, comments
 ├── parser.py           Dedupe and sort helpers for ReportRow lists
 ├── models.py           Pydantic request/response models
 ├── job_store.py        In-memory job tracking (pending → running → done | error)
 ├── config_store.py     Credential persistence (~/.jira_audit_config.json, mode 0600)
+├── schedule_store.py   Schedule config (~/.jira_audit_schedule.json) and last-run log
 ├── requirements.txt
+├── reports/            Auto-created — scheduled CSV output (tickets_touched_YYYY-MM-DD_HH-MM.csv)
+├── launch.bat          Windows one-click launcher
 ├── tests/
 │   └── test_dates.py   Unit tests for timezone date-window logic
 ├── templates/
@@ -245,6 +288,8 @@ curl -X POST http://localhost:8000/api/auth/clear
 | GET | `/api/users/search?q=` | Searches Jira users (min 2 chars) |
 | POST | `/api/report/start` | Starts a background report job |
 | GET | `/api/report/{job_id}` | Polls job status / returns results + filter window |
+| GET | `/api/schedule` | Returns saved schedule config, last-run record, and next-run time |
+| POST | `/api/schedule` | Saves schedule config and re-arms the scheduler |
 
 ### Report request body
 

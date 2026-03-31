@@ -1,5 +1,5 @@
 /**
- * app.js — Frontend logic for the Jira Audit app.
+ * app.js — Frontend logic for the Tickets Touched Report app.
  */
 
 // ─────────────────────────────────────────────────────────── constants
@@ -47,6 +47,8 @@ function showReportScreen(displayName) {
   document.getElementById('screen-report').classList.remove('hidden');
   document.getElementById('connection-badge').textContent = `Connected as ${displayName}`;
   initDatePicker();
+  restoreFormState();
+  restoreSchedPanelState();
 }
 
 // ─────────────────────────────────────────────────────────── auth
@@ -171,6 +173,7 @@ function selectUser(user) {
   if (!state.selectedUsers.find(u => u.account_id === user.account_id)) {
     state.selectedUsers.push(user);
     renderChips();
+    saveFormState();
   }
   document.getElementById('user-search-input').value = '';
   hideDropdown();
@@ -179,6 +182,7 @@ function selectUser(user) {
 function removeUser(accountId) {
   state.selectedUsers = state.selectedUsers.filter(u => u.account_id !== accountId);
   renderChips();
+  saveFormState();
 }
 
 function renderChips() {
@@ -199,6 +203,77 @@ document.addEventListener('click', e => {
   const wrapper = document.querySelector('.user-search-wrapper');
   if (wrapper && !wrapper.contains(e.target)) hideDropdown();
 });
+
+// ─────────────────────────────────────────────────────────── form state persistence
+
+const FORM_STATE_KEY = 'tickets_touched_form_state';
+
+function saveFormState() {
+  const state_data = {
+    users:       state.selectedUsers,
+    rangeKey:    document.getElementById('range-select')?.value || '7d',
+    projectKeys: document.getElementById('project-filter')?.value || '',
+    dateStart:   document.getElementById('date-start')?.value || '',
+    dateEnd:     document.getElementById('date-end')?.value || '',
+  };
+  try {
+    localStorage.setItem(FORM_STATE_KEY, JSON.stringify(state_data));
+  } catch (_) {}
+}
+
+function restoreFormState() {
+  let saved;
+  try {
+    const raw = localStorage.getItem(FORM_STATE_KEY);
+    if (!raw) return;
+    saved = JSON.parse(raw);
+  } catch (_) { return; }
+
+  if (saved.users && Array.isArray(saved.users) && saved.users.length) {
+    state.selectedUsers = saved.users;
+    renderChips();
+  }
+
+  if (saved.rangeKey) {
+    const sel = document.getElementById('range-select');
+    if (sel) {
+      sel.value = saved.rangeKey;
+      handleRangeChange(saved.rangeKey);
+    }
+  }
+
+  if (saved.projectKeys) {
+    const el = document.getElementById('project-filter');
+    if (el) el.value = saved.projectKeys;
+  }
+
+  if (saved.rangeKey === 'custom') {
+    if (saved.dateStart) {
+      const el = document.getElementById('date-start');
+      if (el) el.value = saved.dateStart;
+    }
+    if (saved.dateEnd) {
+      const el = document.getElementById('date-end');
+      if (el) el.value = saved.dateEnd;
+    }
+  }
+}
+
+function clearFormState() {
+  try { localStorage.removeItem(FORM_STATE_KEY); } catch (_) {}
+  state.selectedUsers = [];
+  renderChips();
+  const sel = document.getElementById('range-select');
+  if (sel) { sel.value = '7d'; handleRangeChange('7d'); }
+  const proj = document.getElementById('project-filter');
+  if (proj) proj.value = '';
+  const start = document.getElementById('date-start');
+  const end   = document.getElementById('date-end');
+  if (start) start.value = offsetDateStr(7);
+  if (end)   end.value   = todayStr();
+  document.getElementById('user-search-input').value = '';
+  hideDropdown();
+}
 
 // ─────────────────────────────────────────────────────────── date picker
 
@@ -245,6 +320,7 @@ function handleRangeChange(value) {
       dateErrorEl.textContent = '';
     }
   }
+  saveFormState();
 }
 
 // ─────────────────────────────────────────────────────────── report generation
@@ -666,7 +742,7 @@ function exportCSV() {
   const url  = URL.createObjectURL(blob);
   const a    = document.createElement('a');
   a.href     = url;
-  a.download = `jira_audit_${new Date().toISOString().slice(0, 10)}.csv`;
+  a.download = `tickets_touched_${new Date().toISOString().slice(0, 10)}.csv`;
   a.click();
   URL.revokeObjectURL(url);
 }
@@ -713,4 +789,203 @@ function escHtml(str) {
   return String(str ?? '')
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+}
+
+// ─────────────────────────────────────────────────────────── scheduler UI
+
+let _schedPollTimer = null;
+const SCHED_POLL_MS  = 20_000; // refresh status every 20 s while panel is open
+const SCHED_STATE_KEY = 'tickets_touched_sched_state';
+
+/** Persist scheduler field values + panel-open state to localStorage. */
+function saveSchedDraft() {
+  try {
+    localStorage.setItem(SCHED_STATE_KEY, JSON.stringify({
+      open:      true,
+      enabled:   document.getElementById('sched-enabled')?.checked ?? false,
+      run_time:  document.getElementById('sched-time')?.value  || '07:00',
+      run_until: document.getElementById('sched-until')?.value || '',
+    }));
+  } catch (_) {}
+}
+
+/** Restore panel open/closed state and field values on page load. */
+function restoreSchedPanelState() {
+  let saved;
+  try {
+    const raw = localStorage.getItem(SCHED_STATE_KEY);
+    if (!raw) return;
+    saved = JSON.parse(raw);
+  } catch (_) { return; }
+
+  if (!saved || !saved.open) return;
+
+  // Expand the panel
+  const body    = document.getElementById('sched-body');
+  const chevron = document.getElementById('sched-chevron');
+  body.classList.remove('hidden');
+  chevron.classList.add('open');
+
+  // Restore draft field values before fetching from backend
+  // (loadScheduleUI will overwrite with saved config if one exists)
+  if (saved.run_time)  document.getElementById('sched-time').value  = saved.run_time;
+  if (saved.run_until) document.getElementById('sched-until').value = saved.run_until;
+  document.getElementById('sched-enabled').checked = !!saved.enabled;
+  updateSchedBadge(saved.enabled, saved.run_until);
+
+  // Fetch authoritative config from backend and start polling
+  loadScheduleUI();
+  _schedPollTimer = setInterval(loadScheduleUI, SCHED_POLL_MS);
+}
+
+/** Toggle the scheduler panel open/closed. */
+function toggleScheduler() {
+  const body    = document.getElementById('sched-body');
+  const chevron = document.getElementById('sched-chevron');
+  const isHidden = body.classList.toggle('hidden');
+  chevron.classList.toggle('open', !isHidden);
+  if (!isHidden) {
+    loadScheduleUI();
+    _schedPollTimer = setInterval(loadScheduleUI, SCHED_POLL_MS);
+    saveSchedDraft();
+  } else {
+    clearInterval(_schedPollTimer);
+    _schedPollTimer = null;
+    try { localStorage.removeItem(SCHED_STATE_KEY); } catch (_) {}
+  }
+}
+
+/** Load saved schedule config from the backend and populate the form. */
+async function loadScheduleUI() {
+  try {
+    const res  = await fetch('/api/schedule');
+    if (!res.ok) return;
+    const data = await res.json();
+    if (!data || !data.config) return;
+    const cfg = data.config;
+
+    document.getElementById('sched-enabled').checked = !!cfg.enabled;
+    if (cfg.run_time)  document.getElementById('sched-time').value  = cfg.run_time;
+    if (cfg.run_until) document.getElementById('sched-until').value = cfg.run_until;
+
+    updateSchedBadge(cfg.enabled, cfg.run_until);
+    renderSchedStatus(data.last_run || null, data.next_run || null);
+  } catch (_) {}
+}
+
+/** Reflect the enabled state in the header badge. */
+function handleSchedEnabledChange() {
+  const enabled  = document.getElementById('sched-enabled').checked;
+  const runUntil = document.getElementById('sched-until').value;
+  updateSchedBadge(enabled, runUntil);
+}
+
+function updateSchedBadge(enabled, runUntil) {
+  const badge = document.getElementById('sched-status-badge');
+  if (!badge) return;
+  const today   = new Date().toISOString().slice(0, 10);
+  const expired = runUntil && runUntil < today;
+  if (!enabled) {
+    badge.textContent = 'Off';
+    badge.className   = 'sched-badge sched-badge-off';
+  } else if (expired) {
+    badge.textContent = 'Expired';
+    badge.className   = 'sched-badge sched-badge-expired';
+  } else {
+    badge.textContent = 'On';
+    badge.className   = 'sched-badge sched-badge-on';
+  }
+}
+
+/**
+ * Save the schedule — reads users, projects, and range directly from the
+ * main report form so the scheduler always mirrors what the user has set up.
+ */
+async function saveSchedule() {
+  if (!state.selectedUsers.length) {
+    alert('Please select at least one user in the report form above before saving the schedule.');
+    return;
+  }
+
+  const runUntil = document.getElementById('sched-until').value;
+  if (!runUntil) {
+    alert('Please set a Run Until date.');
+    return;
+  }
+
+  // Read project keys from the main form
+  const projectRaw  = (document.getElementById('project-filter')?.value || '').trim();
+  const projectKeys = projectRaw
+    ? projectRaw.split(',').map(k => k.trim().toUpperCase()).filter(k => k.length > 0)
+    : [];
+
+  const config = {
+    enabled:       document.getElementById('sched-enabled').checked,
+    run_time:      document.getElementById('sched-time').value || '07:00',
+    run_until:     runUntil,
+    range_key:     document.getElementById('range-select').value || '1d',
+    account_ids:   state.selectedUsers.map(u => u.account_id),
+    display_names: Object.fromEntries(state.selectedUsers.map(u => [u.account_id, u.display_name])),
+    project_keys:  projectKeys,
+  };
+
+  try {
+    const res = await fetch('/api/schedule', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify(config),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      alert(`Failed to save: ${err.detail || res.status}`);
+      return;
+    }
+    updateSchedBadge(config.enabled, config.run_until);
+    // Reload status so next-run time reflects the newly armed job
+    await loadScheduleUI();
+    // Visual feedback: flash the Save button green
+    const btn = document.getElementById('sched-save-btn');
+    if (btn) {
+      btn.textContent = 'Saved ✓';
+      btn.classList.add('sched-save-btn-success');
+      setTimeout(() => {
+        btn.textContent = 'Save Schedule';
+        btn.classList.remove('sched-save-btn-success');
+      }, 2000);
+    }
+  } catch (e) {
+    alert('Could not reach the server.');
+  }
+}
+
+/** Render last-run and next-run info in the status line. Always shows something. */
+function renderSchedStatus(lastRun, nextRunIso) {
+  const el = document.getElementById('sched-status-line');
+  if (!el) return;
+
+  const fmtDateTime = iso => new Date(iso).toLocaleString(undefined, {
+    month: 'short', day: 'numeric', year: 'numeric',
+    hour: '2-digit', minute: '2-digit',
+  });
+
+  const nextPart = nextRunIso
+    ? `Next run: ${fmtDateTime(nextRunIso)}`
+    : 'Not scheduled';
+
+  if (!lastRun || !lastRun.last_run_at) {
+    el.textContent = `Not yet run  ·  ${nextPart}`;
+    el.className   = 'sched-status-line';
+    el.classList.remove('hidden');
+    return;
+  }
+
+  const when = fmtDateTime(lastRun.last_run_at);
+  if (lastRun.last_run_ok) {
+    el.textContent = `Last ran: ${when} — ${lastRun.last_run_rows} row(s) saved to reports/  ·  ${nextPart}`;
+    el.className   = 'sched-status-line ok';
+  } else {
+    el.textContent = `Last run failed (${when}): ${lastRun.last_error || 'unknown error'}  ·  ${nextPart}`;
+    el.className   = 'sched-status-line error';
+  }
+  el.classList.remove('hidden');
 }
