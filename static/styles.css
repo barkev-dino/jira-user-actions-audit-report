@@ -420,6 +420,15 @@ body {
   gap: 6px;
   margin-top: 8px;
   min-height: 8px;
+  max-height: 96px;       /* ~3 rows of chips */
+  overflow-y: auto;
+  padding-right: 2px;     /* prevent scrollbar clipping */
+}
+
+.chips-count {
+  font-size: 11px;
+  color: var(--text-subtle);
+  margin-top: 4px;
 }
 
 .chip {
@@ -954,4 +963,67 @@ tr:hover td { background: #f0f5ff; }
   color: var(--text-subtle);
   font-style: italic;
   margin: 0;
+}
+
+/* ─────────────────────────────────────────────────────────── group cards */
+.group-card {
+  background: var(--bg);
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 14px;
+}
+
+.group-card-top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.group-name-input {
+  flex: 1 1 140px;
+  min-width: 100px;
+  padding: 5px 8px;
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  background: var(--surface);
+  outline: none;
+  transition: border-color .15s;
+}
+
+.group-name-input:focus {
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 2px rgba(76,154,255,.2);
+}
+
+.group-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.group-delete-btn {
+  color: var(--danger) !important;
+  border-color: #ffbdad !important;
+}
+.group-delete-btn:hover {
+  background: #ffebe6 !important;
+}
+
+.group-members {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text-subtle);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.group-member-count {
+  font-size: 11px;
+  color: var(--text-subtle);
+  margin-top: 2px;
 }

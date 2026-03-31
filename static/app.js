@@ -3,7 +3,7 @@
  */
 
 // ─────────────────────────────────────────────────────────── constants
-const POLL_TIMEOUT_MS = 5 * 60 * 1000;
+const POLL_TIMEOUT_MS = 15 * 60 * 1000;
 
 // ─────────────────────────────────────────────────────────── state
 const state = {
@@ -197,6 +197,13 @@ function renderChips() {
       <button class="chip-remove" onclick="removeUser('${escHtml(user.account_id)}')" title="Remove">×</button>`;
     container.appendChild(chip);
   });
+
+  // Show count label when more than a few users are selected
+  const countEl = document.getElementById('chips-count');
+  if (countEl) {
+    const n = state.selectedUsers.length;
+    countEl.textContent = n > 3 ? `${n} users selected` : '';
+  }
 }
 
 document.addEventListener('click', e => {
@@ -421,7 +428,7 @@ function startPolling(jobId) {
 async function pollJob(jobId) {
   if (Date.now() - state.pollStarted > POLL_TIMEOUT_MS) {
     clearInterval(state.pollTimer);
-    reportError('Report timed out after 5 minutes. The server may be unresponsive.');
+    reportError('Report timed out after 15 minutes. The server may be unresponsive.');
     return;
   }
 
@@ -988,4 +995,203 @@ function renderSchedStatus(lastRun, nextRunIso) {
     el.className   = 'sched-status-line error';
   }
   el.classList.remove('hidden');
+}
+
+// ─────────────────────────────────────────────────────────── user groups
+
+/** Toggle the groups panel open/closed. */
+function toggleGroups() {
+  const body    = document.getElementById('groups-body');
+  const chevron = document.getElementById('groups-chevron');
+  const isHidden = body.classList.toggle('hidden');
+  chevron.classList.toggle('open', !isHidden);
+  if (!isHidden) loadGroupsUI();
+}
+
+/** Fetch all groups from the server and render them. */
+async function loadGroupsUI() {
+  try {
+    const res  = await fetch('/api/groups');
+    if (!res.ok) return;
+    const data = await res.json();
+    renderGroups(data.groups || []);
+  } catch (_) {}
+}
+
+/** Render the list of group cards. */
+function renderGroups(groups) {
+  const list    = document.getElementById('groups-list');
+  const badge   = document.getElementById('groups-count-badge');
+  const newBtn  = document.getElementById('btn-new-group');
+  const capNote = document.getElementById('groups-cap-note');
+  if (!list) return;
+
+  if (badge) {
+    badge.textContent = `${groups.length} saved`;
+    badge.className   = groups.length ? 'sched-badge sched-badge-on' : 'sched-badge sched-badge-off';
+  }
+
+  const atCap = groups.length >= 5;
+  if (newBtn)  newBtn.disabled = atCap;
+  if (capNote) capNote.classList.toggle('hidden', !atCap);
+
+  list.innerHTML = '';
+  if (!groups.length) {
+    list.innerHTML = '<p style="font-size:12px;color:#6b778c;font-style:italic;">No groups saved yet.</p>';
+    return;
+  }
+
+  groups.forEach(group => {
+    const memberNames = (group.account_ids || [])
+      .map(id => (group.display_names || {})[id] || id)
+      .join(', ') || 'No members';
+
+    const card = document.createElement('div');
+    card.className  = 'group-card';
+    card.dataset.id = group.id;
+    card.innerHTML  = `
+      <div class="group-card-top">
+        <input
+          class="group-name-input"
+          type="text"
+          value="${escHtml(group.name)}"
+          maxlength="40"
+          aria-label="Group name"
+          onchange="renameGroup('${escHtml(group.id)}', this.value)"
+        />
+        <div class="group-actions">
+          <button class="btn btn-ghost btn-sm" onclick="loadGroup('${escHtml(group.id)}')">↩ Load</button>
+          <button class="btn btn-ghost btn-sm group-save-btn" onclick="saveGroup('${escHtml(group.id)}')">Save</button>
+          <button class="btn btn-ghost btn-sm group-delete-btn" onclick="deleteGroup('${escHtml(group.id)}')">✕ Delete</button>
+        </div>
+      </div>
+      <div class="group-members">${escHtml(memberNames)}</div>
+      <div class="group-member-count">${(group.account_ids || []).length} member${(group.account_ids || []).length !== 1 ? 's' : ''}</div>
+    `;
+    list.appendChild(card);
+  });
+}
+
+/** Create a new group from the current chip selection. */
+async function createGroup() {
+  if (!state.selectedUsers.length) {
+    alert('Please select at least one user before creating a group.');
+    return;
+  }
+  try {
+    const res = await fetch('/api/groups', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify(_groupPayload('New Group')),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      alert(err.detail || 'Could not create group.');
+      return;
+    }
+    await loadGroupsUI();
+  } catch (_) {
+    alert('Could not reach the server.');
+  }
+}
+
+/** Load a group — populate chips with its members. */
+async function loadGroup(groupId) {
+  try {
+    const res  = await fetch('/api/groups');
+    if (!res.ok) return;
+    const data = await res.json();
+    const group = (data.groups || []).find(g => g.id === groupId);
+    if (!group) return;
+
+    state.selectedUsers = (group.account_ids || []).map(id => ({
+      account_id:   id,
+      display_name: (group.display_names || {})[id] || id,
+      avatar_url:   (group.avatar_urls   || {})[id] || null,
+    }));
+    renderChips();
+    saveFormState();
+
+    const btn = document.querySelector(`.group-card[data-id="${groupId}"] .btn`);
+    if (btn) {
+      const orig = btn.textContent;
+      btn.textContent = '✓ Loaded';
+      btn.classList.add('sched-save-btn-success');
+      setTimeout(() => { btn.textContent = orig; btn.classList.remove('sched-save-btn-success'); }, 1500);
+    }
+  } catch (_) {}
+}
+
+/** Save current chip selection back to an existing group. */
+async function saveGroup(groupId) {
+  if (!state.selectedUsers.length) {
+    alert('Please select at least one user before saving the group.');
+    return;
+  }
+  const nameInput = document.querySelector(`.group-card[data-id="${groupId}"] .group-name-input`);
+  const name      = nameInput ? nameInput.value.trim() || 'New Group' : 'New Group';
+
+  try {
+    const res = await fetch('/api/groups', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ id: groupId, ..._groupPayload(name) }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      alert(err.detail || 'Could not save group.');
+      return;
+    }
+    await loadGroupsUI();
+    const btn = document.querySelector(`.group-card[data-id="${groupId}"] .group-save-btn`);
+    if (btn) {
+      btn.textContent = 'Saved ✓';
+      btn.classList.add('sched-save-btn-success');
+      setTimeout(() => { btn.textContent = 'Save'; btn.classList.remove('sched-save-btn-success'); }, 1500);
+    }
+  } catch (_) {
+    alert('Could not reach the server.');
+  }
+}
+
+/** Persist an inline name change without touching members. */
+async function renameGroup(groupId, name) {
+  try {
+    const res  = await fetch('/api/groups');
+    const data = await res.json().catch(() => ({ groups: [] }));
+    const group = (data.groups || []).find(g => g.id === groupId);
+    if (!group) return;
+    await fetch('/api/groups', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({
+        id:            groupId,
+        name:          name.trim() || 'New Group',
+        account_ids:   group.account_ids,
+        display_names: group.display_names,
+        avatar_urls:   group.avatar_urls,
+      }),
+    });
+  } catch (_) {}
+}
+
+/** Delete a group after confirmation. */
+async function deleteGroup(groupId) {
+  if (!confirm('Delete this group?')) return;
+  try {
+    await fetch(`/api/groups/${groupId}`, { method: 'DELETE' });
+    await loadGroupsUI();
+  } catch (_) {
+    alert('Could not reach the server.');
+  }
+}
+
+/** Build the common group payload from current chip state. */
+function _groupPayload(name) {
+  return {
+    name,
+    account_ids:   state.selectedUsers.map(u => u.account_id),
+    display_names: Object.fromEntries(state.selectedUsers.map(u => [u.account_id, u.display_name])),
+    avatar_urls:   Object.fromEntries(state.selectedUsers.map(u => [u.account_id, u.avatar_url || null])),
+  };
 }

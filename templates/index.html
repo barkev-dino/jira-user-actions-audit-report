@@ -92,6 +92,7 @@
             <ul id="user-dropdown" class="dropdown hidden"></ul>
           </div>
           <div id="selected-users" class="chips-row"></div>
+          <div id="chips-count" class="chips-count"></div>
         </div>
 
         <!-- Time range -->
@@ -145,6 +146,36 @@
       <!-- Project key validation error -->
       <div id="project-error" class="error-msg hidden" style="margin-top:8px"></div>
     </div>
+
+    <!-- ── User Groups panel ─────────────────────────────────────────────── -->
+    <div class="card report-card sched-card" id="groups-card">
+      <div class="sched-header" onclick="toggleGroups()">
+        <span class="sched-title">User Groups</span>
+        <span class="sched-badge sched-badge-off" id="groups-count-badge">0 saved</span>
+        <span class="sched-chevron" id="groups-chevron">▶</span>
+      </div>
+
+      <div id="groups-body" class="hidden">
+        <p class="sched-uses-form" style="margin-bottom:12px;">
+          Save sets of users as named groups. Load a group to populate the user
+          selection above, then add or remove users and click <strong>Save</strong>
+          on that group to update it. Up to 5 groups.
+        </p>
+
+        <!-- Group cards rendered here by JS -->
+        <div id="groups-list" style="display:flex;flex-direction:column;gap:10px;"></div>
+
+        <!-- New group button -->
+        <div style="margin-top:12px;">
+          <button id="btn-new-group" class="btn btn-ghost btn-sm" onclick="createGroup()">
+            + New Group from current users
+          </button>
+          <span id="groups-cap-note" class="hidden" style="font-size:12px;color:#6b778c;margin-left:10px;">
+            5 group limit reached — delete one to add another.
+          </span>
+        </div>
+      </div>
+    </div><!-- /groups-card -->
 
     <!-- ── Scheduled Reports panel ───────────────────────────────────────── -->
     <div class="card report-card sched-card">

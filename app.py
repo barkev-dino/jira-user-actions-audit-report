@@ -40,6 +40,7 @@ from jira_client import JiraAuthError
 import job_store
 import parser as feed_parser
 import schedule_store
+import groups_store
 from models import (
     AuthTestRequest, AuthTestResponse, AuthTestUser,
     ReportRow,
@@ -283,6 +284,52 @@ async def save_schedule(body: dict):
     return {"ok": True}
 
 
+# ------------------------------------------------------------------ group routes
+
+@app.get("/api/groups")
+async def get_groups():
+    """Return all saved user groups."""
+    return {"groups": groups_store.load_groups()}
+
+
+@app.post("/api/groups")
+async def save_group(body: dict):
+    """
+    Create or update a user group.
+    Body must include: name, account_ids, display_names, avatar_urls.
+    If 'id' is present and matches an existing group, it is updated.
+    Otherwise a new group is created (subject to MAX_GROUPS cap).
+    """
+    name          = body.get("name", "New Group")
+    account_ids   = body.get("account_ids", [])
+    display_names = body.get("display_names", {})
+    avatar_urls   = body.get("avatar_urls", {})
+    group_id      = body.get("id")
+
+    try:
+        if group_id and groups_store.get_group(group_id):
+            group = groups_store.update_group(
+                group_id,
+                name=name,
+                account_ids=account_ids,
+                display_names=display_names,
+                avatar_urls=avatar_urls,
+            )
+        else:
+            group = groups_store.create_group(name, account_ids, display_names, avatar_urls)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    return {"group": group}
+
+
+@app.delete("/api/groups/{group_id}")
+async def delete_group(group_id: str):
+    """Delete a user group by ID."""
+    groups_store.delete_group(group_id)
+    return {"ok": True}
+
+
 # ------------------------------------------------------------------ background job
 
 async def _run_report_job(
@@ -373,7 +420,7 @@ async def _run_report_job(
             n   = idx + 1
             pct = 15 + int((idx / max(total_issues, 1)) * 65)
             job.update(f"{n}/{total_issues}|{key}|fetching history…", pct)
-            await asyncio.sleep(0)
+            await asyncio.sleep(0.1)  # polite throttle — stays well under Jira rate limits
 
             histories = await jira_client.fetch_issue_changelog(
                 site_url, cfg["email"], cfg["api_token"], key,
@@ -505,6 +552,7 @@ async def _run_scheduled_report() -> None:
 
         issue_histories: dict = {}
         for key in candidate_keys:
+            await asyncio.sleep(0.1)  # polite throttle
             histories = await jira_client.fetch_issue_changelog(
                 jira_cfg["site_url"], jira_cfg["email"], jira_cfg["api_token"], key,
             )
