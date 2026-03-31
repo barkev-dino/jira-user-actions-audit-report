@@ -5,10 +5,42 @@ All public functions are async so they can be awaited from FastAPI route
 handlers without blocking the event loop.
 """
 
+import asyncio
 import base64
 import httpx
 from typing import List, Optional
 from models import UserItem
+
+# Maximum number of retry attempts when Jira returns 429 Too Many Requests.
+_MAX_RETRIES = 4
+# Default back-off seconds if Jira doesn't send a Retry-After header.
+_DEFAULT_BACKOFF = 5.0
+
+
+async def _with_retry(make_request):
+    """
+    Call make_request() (an async callable that returns an httpx.Response),
+    retrying on 429 with exponential back-off.
+
+    Jira Cloud rate-limits API tokens and returns:
+      HTTP 429  +  Retry-After: <seconds>   (honour the header)
+      HTTP 429  (no header)                 (fall back to _DEFAULT_BACKOFF, doubled each retry)
+
+    Raises the last httpx exception if all retries are exhausted.
+    Re-raises JiraAuthError / ValueError immediately (no retry for auth failures).
+    """
+    backoff = _DEFAULT_BACKOFF
+    for attempt in range(_MAX_RETRIES + 1):
+        resp = await make_request()
+        if resp.status_code != 429:
+            return resp
+        if attempt == _MAX_RETRIES:
+            return resp   # caller will handle the non-2xx status
+        retry_after = resp.headers.get("Retry-After")
+        wait = float(retry_after) if retry_after else backoff
+        await asyncio.sleep(wait)
+        backoff = min(backoff * 2, 60.0)   # cap at 60 s
+    return resp  # unreachable but satisfies type checker
 
 
 class JiraAuthError(ValueError):
@@ -44,7 +76,7 @@ async def verify_credentials(site_url: str, email: str, api_token: str) -> dict:
     }
     try:
         async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.get(url, headers=headers)
+            resp = await _with_retry(lambda: client.get(url, headers=headers))
     except httpx.ConnectError:
         raise ValueError(f"Could not connect to {site_url} — check the site URL")
     except httpx.TimeoutException:
@@ -88,7 +120,7 @@ async def search_users(site_url: str, email: str, api_token: str, query: str) ->
 
     try:
         async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.get(url, headers=headers, params=params)
+            resp = await _with_retry(lambda: client.get(url, headers=headers, params=params))
     except httpx.ConnectError:
         raise ValueError(f"Cannot connect to {site_url}")
     except httpx.TimeoutException:
@@ -163,7 +195,7 @@ async def search_issues_page(
         params.append(("nextPageToken", next_page_token))
     try:
         async with httpx.AsyncClient(timeout=60) as client:
-            resp = await client.get(url, headers=headers, params=params)
+            resp = await _with_retry(lambda: client.get(url, headers=headers, params=params))
         if resp.status_code in (401, 403):
             raise JiraAuthError(
                 f"Jira credentials rejected during issue search (HTTP {resp.status_code})"
@@ -198,7 +230,7 @@ async def search_created_issues_page(
         params.append(("nextPageToken", next_page_token))
     try:
         async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.get(url, headers=headers, params=params)
+            resp = await _with_retry(lambda: client.get(url, headers=headers, params=params))
         if resp.status_code in (401, 403):
             raise JiraAuthError(
                 f"Jira credentials rejected during created-issues search (HTTP {resp.status_code})"
@@ -228,7 +260,7 @@ async def fetch_issue_comments(
     params = {"startAt": start_at, "maxResults": max_results, "orderBy": "created"}
     try:
         async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.get(url, headers=headers, params=params)
+            resp = await _with_retry(lambda: client.get(url, headers=headers, params=params))
         if resp.status_code in (401, 403):
             raise JiraAuthError(
                 f"Jira credentials rejected fetching comments for {issue_key} (HTTP {resp.status_code})"
@@ -260,9 +292,11 @@ async def fetch_issue_changelog(
     while True:
         try:
             async with httpx.AsyncClient(timeout=15) as client:
-                resp = await client.get(
-                    url, headers=headers,
-                    params={"startAt": start, "maxResults": 100},
+                resp = await _with_retry(
+                    lambda: client.get(
+                        url, headers=headers,
+                        params={"startAt": start, "maxResults": 100},
+                    )
                 )
             if resp.status_code in (401, 403):
                 raise JiraAuthError(

@@ -38,7 +38,22 @@ Simply double-click **`launch.bat`** inside the unzipped folder. It will:
 
 > If Windows shows a security warning ("Windows protected your PC"), click **More info → Run anyway**. This appears because the file isn't code-signed.
 
-**Mac / Linux — terminal:**
+**Mac — double-click launcher:**
+
+1. Open Terminal once and run this command to make the launcher executable (one-time setup):
+   ```bash
+   chmod +x ~/Downloads/jira-user-actions-audit-report-main/launch.command
+   ```
+2. Double-click **`launch.command`** in Finder. It will:
+   - Create a virtual environment and install dependencies (first run only)
+   - Start the server
+   - Open your browser automatically
+
+> If macOS shows *"launch.command cannot be opened because it is from an unidentified developer"*, right-click the file → **Open** → **Open** to allow it once.
+
+> **To stop the app**, press `Ctrl+C` in the Terminal window that opened, or simply close that window.
+
+**Mac / Linux — terminal (manual):**
 ```bash
 cd jira-user-actions-audit-report-main
 python3 -m venv .venv
@@ -239,7 +254,8 @@ jira_user_audit_report/
 ├── schedule_store.py   Schedule config (~/.jira_audit_schedule.json) and last-run log
 ├── requirements.txt
 ├── reports/            Auto-created — scheduled CSV output (tickets_touched_YYYY-MM-DD_HH-MM.csv)
-├── launch.bat          Windows one-click launcher
+├── launch.bat          Windows one-click launcher (double-click)
+├── launch.command      Mac one-click launcher (double-click)
 ├── tests/
 │   └── test_dates.py   Unit tests for timezone date-window logic
 ├── templates/
