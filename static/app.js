@@ -49,6 +49,7 @@ function showReportScreen(displayName) {
   initDatePicker();
   restoreFormState();
   restoreSchedPanelState();
+  loadGroupsUI();  // update the groups badge even while panel is closed
 }
 
 // ─────────────────────────────────────────────────────────── auth
