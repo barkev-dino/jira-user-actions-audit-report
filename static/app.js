@@ -3,7 +3,7 @@
  */
 
 // ─────────────────────────────────────────────────────────── constants
-const POLL_TIMEOUT_MS = 15 * 60 * 1000;
+const POLL_TIMEOUT_MS = 60 * 60 * 1000;
 
 // ─────────────────────────────────────────────────────────── state
 const state = {
@@ -429,7 +429,7 @@ function startPolling(jobId) {
 async function pollJob(jobId) {
   if (Date.now() - state.pollStarted > POLL_TIMEOUT_MS) {
     clearInterval(state.pollTimer);
-    reportError('Report timed out after 15 minutes. The server may be unresponsive.');
+    reportError('Report timed out after 60 minutes. The server may be unresponsive.');
     return;
   }
 
