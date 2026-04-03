@@ -737,16 +737,42 @@ function renderSummary(rows) {
 
 // ─────────────────────────────────────────────────────────── export
 function exportCSV() {
-  const headers = ['Timestamp', 'User', 'Issue Key', 'Action Type', 'Details', 'Project', 'Issue URL'];
-  const csvRows = [
-    headers.join(','),
-    ...state.filteredRows.map(r =>
+  const q = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
+  const rows = [];
+
+  // ── Section 1: Summary matrix ─────────────────────────────────────────────
+  if (state.allRows.length) {
+    const { users, actionTypes, counts, totByUser, totByAction, grand } =
+      computeSummary(state.allRows);
+
+    rows.push([q('SUMMARY')].join(','));
+    rows.push(['User', ...actionTypes.map(formatActionType), 'Total'].map(q).join(','));
+
+    for (const user of users) {
+      rows.push(
+        [user, ...actionTypes.map(at => counts[user][at] || 0), totByUser[user]]
+          .map(q).join(',')
+      );
+    }
+    rows.push(
+      ['Total', ...actionTypes.map(at => totByAction[at]), grand].map(q).join(',')
+    );
+
+    // Blank separator row
+    rows.push('');
+  }
+
+  // ── Section 2: Activity detail ────────────────────────────────────────────
+  rows.push([q('ACTIVITY DETAIL')].join(','));
+  rows.push(['Timestamp', 'User', 'Issue Key', 'Action Type', 'Details', 'Project', 'Issue URL'].map(q).join(','));
+  for (const r of state.filteredRows) {
+    rows.push(
       [r.timestamp, r.user, r.issue_key, r.action_type, r.details, r.project, r.issue_url]
-        .map(v => `"${String(v ?? '').replace(/"/g, '""')}"`)
-        .join(',')
-    ),
-  ];
-  const blob = new Blob([csvRows.join('\n')], { type: 'text/csv' });
+        .map(q).join(',')
+    );
+  }
+
+  const blob = new Blob([rows.join('\n')], { type: 'text/csv' });
   const url  = URL.createObjectURL(blob);
   const a    = document.createElement('a');
   a.href     = url;
