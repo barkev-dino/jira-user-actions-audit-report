@@ -25,11 +25,13 @@ Last-run log shape:
 """
 
 import json
+import os
 from pathlib import Path
 from typing import Optional
 
-SCHEDULE_PATH  = Path.home() / ".jira_audit_schedule.json"
-LAST_RUN_PATH  = Path.home() / ".jira_audit_last_run.json"
+_DATA_DIR      = Path(os.environ.get("DATA_DIR", Path.home()))
+SCHEDULE_PATH  = _DATA_DIR / ".jira_audit_schedule.json"
+LAST_RUN_PATH  = _DATA_DIR / ".jira_audit_last_run.json"
 
 SCHEDULE_KEYS = {"enabled", "run_time", "run_until", "account_ids",
                  "display_names", "project_keys", "range_key"}

@@ -1,20 +1,26 @@
-# fly.toml app configuration file generated for jira-user-actions-audit-report on 2026-04-03T02:11:44Z
+# fly.toml app configuration file generated for jira-user-actions-audit-report
 #
 # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
-#
 
 app = 'jira-user-actions-audit-report'
 primary_region = 'ams'
 
 [build]
 
+[env]
+  DATA_DIR = "/data"
+
 [http_service]
-  internal_port = 8080
+  internal_port = 8000
   force_https = true
-  auto_stop_machines = 'stop'
+  auto_stop_machines = false   # keep alive so the scheduler never misses a run
   auto_start_machines = true
-  min_machines_running = 0
+  min_machines_running = 1
   processes = ['app']
+
+[[mounts]]
+  source = "appdata"
+  destination = "/data"        # credentials, schedule, groups, reports all persist here
 
 [[vm]]
   memory = '1gb'

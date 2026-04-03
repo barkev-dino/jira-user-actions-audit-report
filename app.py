@@ -21,6 +21,7 @@ Routes:
 import asyncio
 import csv
 import io
+import os
 import re as _re
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -52,7 +53,9 @@ from models import (
 # ------------------------------------------------------------------ app setup
 
 BASE_DIR    = Path(__file__).parent
-REPORTS_DIR = BASE_DIR / "reports"
+# On Fly.io DATA_DIR=/data (persistent volume). Locally falls back to ./reports.
+_DATA_DIR   = Path(os.environ.get("DATA_DIR", BASE_DIR))
+REPORTS_DIR = _DATA_DIR / "reports"
 
 _scheduler = AsyncIOScheduler()
 

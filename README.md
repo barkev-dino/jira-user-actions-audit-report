@@ -293,6 +293,66 @@ curl -X POST http://localhost:8000/api/auth/clear
 
 ---
 
+## Deploying to Fly.io (always-on server)
+
+Run the app on a free Fly.io instance so scheduled reports run 24/7 without needing your laptop open.
+
+### Prerequisites
+
+```bash
+# Install the Fly CLI (Mac)
+brew install flyctl
+
+# Install the Fly CLI (Windows)
+powershell -Command "iwr https://fly.io/install.ps1 -useb | iex"
+
+# Log in
+fly auth login
+```
+
+### First deploy
+
+```bash
+# 1. Create the app (only needed once — pick a unique name)
+fly launch --name tickets-touched-report --no-deploy
+
+# 2. Create a persistent volume for credentials, schedule config, and reports
+fly volumes create appdata --size 1 --region iad
+
+# 3. Deploy
+fly deploy
+```
+
+The app will be live at `https://tickets-touched-report.fly.dev`.
+
+### Subsequent deploys
+
+After pushing code changes to GitHub:
+
+```bash
+fly deploy
+```
+
+### Where data is stored on the server
+
+All persistent data lives in the `/data` volume (set via `DATA_DIR` env var):
+
+| File | Contents |
+|---|---|
+| `/data/.jira_audit_config.json` | Jira credentials |
+| `/data/.jira_audit_schedule.json` | Schedule config |
+| `/data/.jira_audit_groups.json` | Saved user groups |
+| `/data/.jira_audit_last_run.json` | Last scheduler run record |
+| `/data/reports/` | Generated CSV files |
+
+### ⚠️ Security note
+
+The app has no login screen — anyone who knows the URL can access it. For a company deployment, restrict access by either:
+- Adding your office IP to Fly.io's firewall (`fly ips` → private networking)
+- Adding HTTP Basic Auth in front of the app (ask if you'd like this added)
+
+---
+
 ## API Reference
 
 | Method | Path | Description |

@@ -1,5 +1,15 @@
 fly.toml
 .git/
 __pycache__/
+*.pyc
+*.pyo
 .envrc
 .venv/
+.DS_Store
+reports/
+*.json
+.env
+docs/superpowers/
+launch.bat
+launch.command
+.claude/

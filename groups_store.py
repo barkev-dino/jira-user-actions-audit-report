@@ -14,11 +14,13 @@ the UI enforces the cap and prevents creation beyond the limit.
 """
 
 import json
+import os
 import time
 from pathlib import Path
 from typing import List, Optional
 
-GROUPS_PATH = Path.home() / ".jira_audit_groups.json"
+_DATA_DIR   = Path(os.environ.get("DATA_DIR", Path.home()))
+GROUPS_PATH = _DATA_DIR / ".jira_audit_groups.json"
 MAX_GROUPS  = 5
 
 

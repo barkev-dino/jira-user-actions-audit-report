@@ -10,7 +10,10 @@ import os
 from pathlib import Path
 from typing import Optional
 
-CONFIG_PATH = Path.home() / ".jira_audit_config.json"
+# DATA_DIR is set to /data on Fly.io (persistent volume).
+# Falls back to home directory for local use.
+_DATA_DIR   = Path(os.environ.get("DATA_DIR", Path.home()))
+CONFIG_PATH = _DATA_DIR / ".jira_audit_config.json"
 
 REQUIRED_KEYS = {"site_url", "email", "api_token", "display_name", "account_id"}
 
