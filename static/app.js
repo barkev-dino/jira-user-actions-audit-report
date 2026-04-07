@@ -772,6 +772,18 @@ function exportXLSX() {
     ]);
   }
   const actSheet = XLSX.utils.aoa_to_sheet(actData);
+
+  // Add hyperlinks to Issue Key column (col 7) — points to Issue URL (col 11)
+  const issueKeyCol  = 7;
+  const issueUrlCol  = 11;
+  for (let r = 1; r < actData.length; r++) {
+    const url = actData[r][issueUrlCol];
+    if (url) {
+      const ref = XLSX.utils.encode_cell({ r, c: issueKeyCol });
+      if (actSheet[ref]) actSheet[ref].l = { Target: url, Tooltip: 'Open in Jira' };
+    }
+  }
+
   // Auto column widths (character estimate)
   actSheet['!cols'] = actHeaders.map((h, i) => {
     const max = actData.reduce((m, row) => Math.max(m, String(row[i] ?? '').length), h.length);
