@@ -736,49 +736,72 @@ function renderSummary(rows) {
 }
 
 // ─────────────────────────────────────────────────────────── export
-function exportCSV() {
-  const q = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
-  const rows = [];
+const TZ_COLS = [
+  { label: 'Pacific Time',          iana: 'America/Los_Angeles' },
+  { label: 'Central Time',          iana: 'America/Chicago'     },
+  { label: 'Eastern Time',          iana: 'America/New_York'    },
+  { label: 'India Standard Time',   iana: 'Asia/Kolkata'        },
+  { label: 'Philippine/Taiwan Time',iana: 'Asia/Manila'         },
+];
 
-  // ── Section 1: Summary matrix ─────────────────────────────────────────────
+function _tzFormat(isoStr, iana) {
+  if (!isoStr) return '';
+  return new Date(isoStr).toLocaleString('en-US', {
+    timeZone: iana,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hour12: false,
+  });
+}
+
+function exportXLSX() {
+  const wb = XLSX.utils.book_new();
+
+  // ── Sheet 1: Activity ─────────────────────────────────────────────────────
+  const actHeaders = [
+    'Timestamp (UTC)',
+    ...TZ_COLS.map(z => z.label),
+    'User', 'Issue Key', 'Action Type', 'Details', 'Project', 'Issue URL',
+  ];
+  const actData = [actHeaders];
+  for (const r of state.filteredRows) {
+    actData.push([
+      r.timestamp,
+      ...TZ_COLS.map(z => _tzFormat(r.timestamp, z.iana)),
+      r.user, r.issue_key, r.action_type, r.details, r.project, r.issue_url,
+    ]);
+  }
+  const actSheet = XLSX.utils.aoa_to_sheet(actData);
+  // Auto column widths (character estimate)
+  actSheet['!cols'] = actHeaders.map((h, i) => {
+    const max = actData.reduce((m, row) => Math.max(m, String(row[i] ?? '').length), h.length);
+    return { wch: Math.min(max + 2, 60) };
+  });
+  XLSX.utils.book_append_sheet(wb, actSheet, 'Activity');
+
+  // ── Sheet 2: Summary ──────────────────────────────────────────────────────
+  const sumData = [];
   if (state.allRows.length) {
     const { users, actionTypes, counts, totByUser, totByAction, grand } =
       computeSummary(state.allRows);
 
-    rows.push([q('SUMMARY')].join(','));
-    rows.push(['User', ...actionTypes.map(formatActionType), 'Total'].map(q).join(','));
-
+    sumData.push(['User', ...actionTypes.map(formatActionType), 'Total']);
     for (const user of users) {
-      rows.push(
-        [user, ...actionTypes.map(at => counts[user][at] || 0), totByUser[user]]
-          .map(q).join(',')
-      );
+      sumData.push([user, ...actionTypes.map(at => counts[user][at] || 0), totByUser[user]]);
     }
-    rows.push(
-      ['Total', ...actionTypes.map(at => totByAction[at]), grand].map(q).join(',')
-    );
-
-    // Blank separator row
-    rows.push('');
+    sumData.push(['Total', ...actionTypes.map(at => totByAction[at]), grand]);
   }
-
-  // ── Section 2: Activity detail ────────────────────────────────────────────
-  rows.push([q('ACTIVITY DETAIL')].join(','));
-  rows.push(['Timestamp', 'User', 'Issue Key', 'Action Type', 'Details', 'Project', 'Issue URL'].map(q).join(','));
-  for (const r of state.filteredRows) {
-    rows.push(
-      [r.timestamp, r.user, r.issue_key, r.action_type, r.details, r.project, r.issue_url]
-        .map(q).join(',')
-    );
+  const sumSheet = XLSX.utils.aoa_to_sheet(sumData);
+  if (sumData.length) {
+    sumSheet['!cols'] = sumData[0].map((h, i) => {
+      const max = sumData.reduce((m, row) => Math.max(m, String(row[i] ?? '').length), String(h).length);
+      return { wch: Math.min(max + 2, 40) };
+    });
   }
+  XLSX.utils.book_append_sheet(wb, sumSheet, 'Summary');
 
-  const blob = new Blob([rows.join('\n')], { type: 'text/csv' });
-  const url  = URL.createObjectURL(blob);
-  const a    = document.createElement('a');
-  a.href     = url;
-  a.download = `tickets_touched_${new Date().toISOString().slice(0, 10)}.csv`;
-  a.click();
-  URL.revokeObjectURL(url);
+  const date = new Date().toISOString().slice(0, 10);
+  XLSX.writeFile(wb, `tickets_touched_${date}.xlsx`);
 }
 
 // ─────────────────────────────────────────────────────────── UI helpers

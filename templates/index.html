@@ -263,7 +263,7 @@
             <span id="results-count" class="results-count"></span>
             <input id="table-filter" type="text" placeholder="Filter rows…"
                    oninput="filterTable(this.value)" class="filter-input" />
-            <button class="btn btn-ghost btn-sm" onclick="exportCSV()">Export CSV</button>
+            <button class="btn btn-ghost btn-sm" onclick="exportXLSX()">Export XLSX</button>
           </div>
         </div>
         <div id="summary-table-wrap" class="summary-table-wrap"></div>
@@ -293,6 +293,7 @@
 
   </div><!-- /screen-report -->
 
+  <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>
